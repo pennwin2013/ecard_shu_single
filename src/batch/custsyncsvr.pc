@@ -1,0 +1,694 @@
+/* --------------------------------------------
+ * ′′?¨è??ú: 2011-11-17
+ * 3ìDò×÷??: ???￡
+ * °?±?D??￠: 3.1.0.0
+ * 3ìDò1|?ü:?í?§D??￠í?2?3ìDò
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <string.h>
+#include "pubdef.h"
+#include "errdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "ConfigFile.h"
+#include "logger_imp.h"
+#include <vector>
+#include <iostream>
+#include <sstream>
+using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+
+static char staticToday[9];
+static char staticCurrentTime[15];
+
+typedef vector<T_t_customertmp> CUSTTMPVECT;
+static int GetCustVect(CUSTTMPVECT& CustVect, int maxrow)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        char batchno[21] = {0};
+        int seqno = 0;
+        char transdate[9] = {0};
+        char opercode[21] = {0};
+        char stuempno[21] = {0};
+        int custtype = 0;
+        char custtypename[61] = {0};
+        int feetype = 0;
+        char custname[61] = {0};
+        char areacode[4] = {0};
+        char deptcode[31] = {0};
+        char deptname[91] = {0};
+        char specialtycode[31] = {0};
+        char classname[61] = {0};
+        char idtype[2] = {0};
+        char idno[61] = {0};
+        char sex[2] = {0};
+        char country[4] = {0};
+        char nation[3] = {0};
+        char email[61] = {0};
+        char tel[31] = {0};
+        char mobile[21] = {0};
+        char addr[241] = {0};
+        char zipcode[7] = {0};
+        char indate[9] = {0};
+        char outdate[9] = {0};
+        short indicator = 0;
+    EXEC SQL END DECLARE SECTION;
+    if(CustVect.size())
+        CustVect.clear();
+    int ret = 0;
+    T_t_customertmp customertmp;
+
+    EXEC SQL DECLARE customertmp_cur CURSOR FOR
+    SELECT
+     batchno,
+     seqno,
+     transdate,
+     opercode,
+     stuempno,
+     custtype,
+     custtypename,
+     feetype,
+     custname,
+     areacode,
+     deptcode,
+     deptname,
+     specialtycode,
+     classname,
+     idtype,
+     idno,
+     sex,
+     country,
+     nation,
+     email,
+     tel,
+     mobile,
+     addr,
+     zipcode,
+     indate,
+     outdate
+    FROM t_customertmp
+    where syncflag = 1 and chkflag=0
+    order by batchno,seqno;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN customertmp_cur;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1)
+    {
+        batchno[0] = 0;
+        seqno = 0;
+        transdate[0] = 0;
+        opercode[0] = 0;
+        stuempno[0] = 0;
+        custtype = 0;
+        custtypename[0] = 0;
+        feetype = 0;
+        custname[0] = 0;
+        areacode[0] = 0;
+        deptcode[0] = 0;
+        deptname[0] = 0;
+        specialtycode[0] = 0;
+        classname[0] = 0;
+        idtype[0] = 0;
+        idno[0] = 0;
+        sex[0] = 0;
+        country[0] = 0;
+        nation[0] = 0;
+        email[0] = 0;
+        tel[0] = 0;
+        mobile[0] = 0;
+        addr[0] = 0;
+        zipcode[0] = 0;
+        indate[0] = 0;
+        outdate[0] = 0;
+        memset(&customertmp, 0, sizeof(customertmp));
+        EXEC SQL FETCH customertmp_cur INTO
+        :batchno:indicator,
+        :seqno:indicator,
+        :transdate:indicator,
+        :opercode:indicator,
+        :stuempno:indicator,
+        :custtype:indicator,
+        :custtypename:indicator,
+        :feetype:indicator,
+        :custname:indicator,
+        :areacode:indicator,
+        :deptcode:indicator,
+        :deptname:indicator,
+        :specialtycode:indicator,
+        :classname:indicator,
+        :idtype:indicator,
+        :idno:indicator,
+        :sex:indicator,
+        :country:indicator,
+        :nation:indicator,
+        :email:indicator,
+        :tel:indicator,
+        :mobile:indicator,
+        :addr:indicator,
+        :zipcode:indicator,
+        :indate:indicator,
+        :outdate:indicator;
+        if(SQLCODE)
+        {
+            ret = SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE customertmp_cur;
+            if(DB_NOTFOUND == ret)
+            {
+                break;
+            }
+            else
+                return E_DB_CUSTOMERTMP_R;
+        }
+        des2src(customertmp.batchno, batchno);
+        customertmp.seqno = seqno;
+        des2src(customertmp.transdate, transdate);
+        des2src(customertmp.opercode, opercode);
+        des2src(customertmp.stuempno, stuempno);
+        customertmp.custtype = custtype;
+        des2src(customertmp.custtypename, custtypename);
+        customertmp.feetype = feetype;
+        des2src(customertmp.custname, custname);
+        des2src(customertmp.areacode, areacode);
+        des2src(customertmp.deptcode, deptcode);
+        des2src(customertmp.deptname, deptname);
+        des2src(customertmp.specialtycode, specialtycode);
+        des2src(customertmp.classname, classname);
+        des2src(customertmp.idtype, idtype);
+        des2src(customertmp.idno, idno);
+        des2src(customertmp.sex, sex);
+        des2src(customertmp.country, country);
+        des2src(customertmp.nation, nation);
+        des2src(customertmp.email, email);
+        des2src(customertmp.tel, tel);
+        des2src(customertmp.tel, mobile);
+        des2src(customertmp.addr, addr);
+        des2src(customertmp.zipcode, zipcode);
+        des2src(customertmp.indate, indate);
+        des2src(customertmp.outdate, outdate);
+        CustVect.push_back(customertmp);
+        if(CustVect.size() >= maxrow)
+        {
+            EXEC SQL CLOSE customertmp_cur;
+            break;
+        }
+    }
+    return 0;
+}
+static int GetCustIDByIDno(const char* idno, int& custid)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        char        hi_idtype[2] = {0};
+        char        hi_idno[60 + 1] = {0};
+        int  ho_custid = 0;
+        short  h_idr;
+    EXEC SQL END DECLARE SECTION;
+    ho_custid = 0;
+    des2src(hi_idno, idno);
+    int len = strlen(hi_idno);
+    if(len != 15 && len != 18)
+        return 0;
+    SQLCODE = 0;
+    EXEC SQL
+    select custid into :ho_custid:h_idr
+    from t_customer
+    where status='1' and idno=:hi_idno and idtype='1' and rownum=1;
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__, __LINE__, &sqlca);
+        if(DB_NOTFOUND == SQLCODE)
+            return 0;
+        else
+            return E_DB_CUSTOMER_R;
+    }
+    LOG(INFO, "idno[" << hi_idno << "]idtype[" << hi_idtype << "]custid[" << ho_custid << "] exist");
+    custid = ho_custid;
+    return 0;
+}
+static int UpdCardExpireDateByCustid(int custid, const char* expiredate)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        char        hi_expiredate[9] = {0};
+        int  hi_custid = custid;
+        short  h_idr;
+    EXEC SQL END DECLARE SECTION;
+    des2src(hi_expiredate, expiredate);
+    int ret = IsInvalidDateTime(hi_expiredate, "YYYYMMDD");
+    if(ret)
+        return ret;
+    SQLCODE = 0;
+    EXEC SQL
+    update t_card set expiredate = :hi_expiredate
+    where status='1' and custid = :hi_custid;
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__, __LINE__, &sqlca);
+        if(DB_NOTFOUND == SQLCODE)
+            return 0;
+        else
+            return E_DB_CUSTOMER_R;
+    }
+    return 0;
+}
+
+static int UpdCustInfo(int custid, T_t_customertmp& tCustomerTmp)
+{
+    int ret = 0;
+    T_t_custtype tCusttype;
+    memset(&tCusttype, 0, sizeof(tCusttype));
+    if(tCustomerTmp.custtype)
+    {
+        ret = DB_t_custtype_read_by_custtype(tCustomerTmp.custtype, &tCusttype);
+        if(ret)
+        {
+            if(DB_NOTFOUND != ret)
+                return E_DB_CUSTTYPE_R;
+        }
+    }
+    SQLCODE = 0;
+    T_t_customer tCustomer;
+    memset(&tCustomer, 0, sizeof(tCustomer));
+    ret = DB_t_customer_read_lock_by_cur_and_custid(custid, &tCustomer);
+    if(ret)
+    {
+        if(DB_NOTFOUND == ret)
+            return E_DB_CUSTOMER_N;
+        else
+            return E_DB_CUSTOMER_R;
+    }
+    tCustomer.custtype = tCustomerTmp.custtype;
+    if(tCustomerTmp.feetype > 0)
+        tCustomer.feetype  = tCustomerTmp.feetype;
+    else
+    {
+        if(tCustomer.feetype < 1)
+            tCustomer.feetype  = tCusttype.feetype;
+    }
+    if(strlen(tCustomerTmp.areacode) <= 1)
+    {
+        if(tCustomerTmp.areacode[0] != '0')
+            des2src(tCustomer.areacode, tCustomerTmp.areacode);
+    }
+    else
+    {
+        des2src(tCustomer.areacode, tCustomerTmp.areacode);
+    }
+    des2src(tCustomer.stuempno, tCustomerTmp.stuempno);
+    des2src(tCustomer.custname, tCustomerTmp.custname);
+    des2src(tCustomer.addr, tCustomerTmp.addr);
+    des2src(tCustomer.sex, tCustomerTmp.sex);
+    des2src(tCustomer.idtype, tCustomerTmp.idtype);
+    des2src(tCustomer.idno, tCustomerTmp.idno);
+    des2src(tCustomer.nation, tCustomerTmp.nation);
+    des2src(tCustomer.addr, tCustomerTmp.addr);
+    des2src(tCustomer.email, tCustomerTmp.email);
+    des2src(tCustomer.zipcode, tCustomerTmp.zipcode);
+    des2src(tCustomer.tel, tCustomerTmp.tel);
+    des2src(tCustomer.deptcode, tCustomerTmp.deptcode);
+    des2src(tCustomer.mobile, tCustomerTmp.mobile);
+    des2src(tCustomer.country, tCustomerTmp.country);
+    des2src(tCustomer.classname, tCustomerTmp.classname);
+    des2src(tCustomer.specialtycode, tCustomerTmp.specialtycode);
+    des2src(tCustomer.indate, tCustomerTmp.indate);
+    des2src(tCustomer.outdate, tCustomerTmp.outdate);
+    des2src(tCustomer.batchno, tCustomerTmp.batchno);
+    tCustomer.eaccflag[0] = '0';
+    tCustomer.status[0] = STATUS_NORMAL;
+    des2src(tCustomer.lastsaved, staticCurrentTime);
+    ret = DB_t_customer_update_lock_by_cur(&tCustomer);
+    if(ret)
+        return E_DB_CUSTOMER_U;
+    LOG(INFO, "update a customer :custid=" << custid);
+    /*
+    if(strlen(tCustomer.outdate)==8)
+    {
+        ret=UpdCardExpireDateByCustid(tCustomer.custid,tCustomer.outdate);
+        if(ret)
+        {
+            LOG(ERROR,"UpdCardExpireDateByCustid ret="<<ret<<",custid="<<tCustomer.custid);
+        }
+    }
+    */
+    return 0;
+}
+static int AddNewCustInfo(T_t_customertmp& tCustomerTmp)
+{
+    int ret;
+    T_t_customer  tCustomer;
+    memset(&tCustomer, 0, sizeof(tCustomer));
+    tCustomerTmp.errmsg[0] = 0;
+    if(tCustomerTmp.feetype > 0)
+        tCustomer.feetype  = tCustomerTmp.feetype;
+    else
+    {
+        T_t_custtype tCusttype;
+        memset(&tCusttype, 0, sizeof(tCusttype));
+        ret = DB_t_custtype_read_by_custtype(tCustomerTmp.custtype, &tCusttype);
+        if(ret)
+        {
+            if(DB_NOTFOUND != ret)
+                return E_DB_CUSTTYPE_R;
+        }
+        tCustomer.feetype  = tCusttype.feetype;
+    }
+    des2src(tCustomer.areacode, tCustomerTmp.areacode);
+    des2src(tCustomer.stuempno, tCustomerTmp.stuempno);
+    des2src(tCustomer.custname, tCustomerTmp.custname);
+    des2src(tCustomer.addr, tCustomerTmp.addr);
+    tCustomer.custtype = tCustomerTmp.custtype;
+    des2src(tCustomer.sex, tCustomerTmp.sex);
+    des2src(tCustomer.idtype, tCustomerTmp.idtype);
+    des2src(tCustomer.idno, tCustomerTmp.idno);
+    des2src(tCustomer.nation, tCustomerTmp.nation);
+    des2src(tCustomer.addr, tCustomerTmp.addr);
+    des2src(tCustomer.email, tCustomerTmp.email);
+    des2src(tCustomer.zipcode, tCustomerTmp.zipcode);
+    des2src(tCustomer.tel, tCustomerTmp.tel);
+    des2src(tCustomer.deptcode, tCustomerTmp.deptcode);
+    des2src(tCustomer.mobile, tCustomerTmp.mobile);
+    des2src(tCustomer.country, tCustomerTmp.country);
+    des2src(tCustomer.classname, tCustomerTmp.classname);
+    des2src(tCustomer.specialtycode, tCustomerTmp.specialtycode);
+    des2src(tCustomer.indate, tCustomerTmp.indate);
+    des2src(tCustomer.outdate, tCustomerTmp.outdate);
+    des2src(tCustomer.batchno, tCustomerTmp.batchno);
+    des2src(tCustomer.opendate, staticToday);
+    tCustomer.eaccflag[0] = '0';
+    tCustomer.status[0] = STATUS_NORMAL;
+    des2src(tCustomer.lastsaved, staticCurrentTime);
+
+    int iAreaCode = atoi(tCustomer.areacode);
+    if(iAreaCode < 1)
+    {
+        strcpy(tCustomer.areacode, "1");
+    }
+    else
+    {
+        sprintf(tCustomer.areacode, "%d", iAreaCode);
+    }
+    ret = GetNewCustIDByShoolCode(tCustomer.areacode, tCustomer.custid);
+    if(ret)
+    {
+        LOG(ERROR, "GetNewCustIDByShoolCode err ret=" << ret << " areacode=" << tCustomer.areacode);
+        sprintf(tCustomerTmp.errmsg, "get new custid by shoolcode ret=[%d] areacode=[%s]", ret, tCustomer.areacode);
+        return ret;
+    }
+    ret = DB_t_customer_add(&tCustomer);
+    if(ret)
+    {
+        LOG(ERROR, "batchno[" << tCustomerTmp.batchno << "]seqno[" << tCustomerTmp.seqno << "]");
+        sprintf(tCustomerTmp.errmsg, "add new customer ret=[%d] stuempno=[%s]", ret, tCustomer.stuempno);
+        return E_DB_CUSTOMER_I;
+    }
+    LOG(INFO, "add a new customer :custid=" << tCustomer.custid);
+    return 0;
+}
+static int GetCustidByStuempnoNoCase(char* stuempno, int& custid)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        char        hi_stuempno[30 + 1] = {0};              //?¤?to???
+        int  ho_custid = 0;
+        short  h_idr;
+    EXEC SQL END DECLARE SECTION;
+    custid = 0;
+    des2src(hi_stuempno, stuempno);
+    SQLCODE = 0;
+    EXEC SQL
+     select custid into :ho_custid:h_idr
+     from t_customer
+     where status='1' and upper(stuempno)=upper(:hi_stuempno);
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__, __LINE__, &sqlca);
+        if(DB_NOTFOUND == SQLCODE)
+            return 0;
+        else
+            return E_DB_CUSTOMER_R;
+    }
+    custid = ho_custid;
+    return 0;
+}
+int SyncCust(T_t_customertmp& customertmp)
+{
+    int ret = 0;
+    int custid = 0;
+    if(strlen(customertmp.stuempno))
+    {
+        ret = GetCustidByStuempno(customertmp.stuempno, custid);
+        if(ret)
+        {
+            LOG(ERROR, "GetCustidByStuempno stuempno=" << customertmp.stuempno << ",ret=" << ret);
+            return ret;
+        }
+        if(custid < 1)
+        {
+            ret = GetCustidByStuempnoNoCase(customertmp.stuempno, custid);
+            if(ret)
+            {
+                LOG(ERROR, "GetCustidByStuempnoNoCase stuempno=" << customertmp.stuempno << ",ret=" << ret);
+                return ret;
+            }
+        }
+    }
+    else
+    {
+        ret = GetCustIDByIDno(customertmp.idno, custid);
+        if(ret)
+        {
+            LOG(ERROR, "GetCustIDByIDno ret=" << ret);
+            return ret;
+        }
+        if(custid > 0)
+        {
+            char stuempno[31] = {0};
+            ret = GetStuempnoByCustid(custid, stuempno);
+            if(ret)
+                return ret;
+            if(strlen(stuempno))
+            {
+                sprintf(customertmp.errmsg, "idno[%s]stuempno[%s] exist", customertmp.idno, stuempno);
+                LOG(ERROR, customertmp.errmsg);
+                return E_COMMON_ERR;
+            }
+        }
+    }
+    if(custid > 0)
+    {
+        ret = UpdCustInfo(custid, customertmp);
+        if(ret)
+        {
+            LOG(ERROR, "UpdCustInfo custid=" << custid << ",ret=" << ret);
+            return ret;
+        }
+    }
+    else
+    {
+        ret = AddNewCustInfo(customertmp);
+        if(ret)
+        {
+            LOG(ERROR, "AddNewCustInfo stuempno=" << customertmp.stuempno << ",ret=" << ret);
+            return ret;
+        }
+    }
+    return 0;
+}
+static int UpdCustomertmpChkResult(const char* batchno, int seqno, int chkflag, const char* errmsg)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        char    hi_batchno[31];
+        int         hi_seqno = 0;
+        int     hi_chkflag = 0;
+        char  hi_errmsg[256] = {0};
+    EXEC SQL END DECLARE SECTION;
+    des2src(hi_batchno, batchno);
+    hi_seqno = seqno;
+    hi_chkflag = chkflag;
+    des2src(hi_errmsg, errmsg);
+    SQLCODE = 0;
+    EXEC SQL
+     update t_customertmp
+     set chkflag=:hi_chkflag, errmsg=:hi_errmsg
+     where batchno=:hi_batchno and seqno = :hi_seqno;
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__, __LINE__, &sqlca);
+        if(DB_NOTFOUND != SQLCODE)
+            return E_DB_CUSTOMERTMP_U;
+    }
+    return 0;
+}
+int BatchSyncCust(int& needsync)
+{
+    int ret = 0;
+    int row = 0;
+    needsync = 0;
+    CUSTTMPVECT CustVect;
+    int maxrow = 1000;
+    ret = GetCustVect(CustVect, maxrow);
+    if(ret)
+        return ret;
+    for(unsigned int i = 0; i < CustVect.size(); i++)
+    {
+        row++;
+        T_t_customertmp& custtmp = CustVect[i];
+        ret = SyncCust(custtmp);
+        if(ret)
+        {
+            custtmp.chkflag = 1;
+        }
+        else
+        {
+            custtmp.chkflag = 2;
+            strcpy(custtmp.errmsg, "check ok");
+
+        }
+        ret = UpdCustomertmpChkResult(custtmp.batchno, custtmp.seqno, custtmp.chkflag, custtmp.errmsg);
+        if(ret)
+            return ret;
+
+        if(i >= maxrow)
+        {
+            needsync = 1;
+            break;
+        }
+    }
+    return 0;
+}
+
+int DoCustSync()
+{
+    int needsync = 0;
+    int ret = -1;
+    do
+    {
+        ret = BatchSyncCust(needsync);
+        if(ret)
+        {
+            ret = db_rollback();
+            if(ret)
+            {
+                LOG(ERROR, "db_rollback error ret=" << ret);
+                return ret;
+            }
+        }
+        ret = db_commit();
+        if(ret)
+        {
+            db_rollback();
+            LOG(ERROR, "db_commit error ret=" << ret);
+            return ret;
+        }
+    }
+    while(needsync);
+    return 0;
+}
+static bool init_config(string pathname, string& connectinfo, string& logconf)
+{
+    try
+    {
+        ConfigFile config(pathname);
+        try
+        {
+            config.readInto(connectinfo, "connectinfo");
+            config.readInto(logconf, "logconf");
+        }
+        catch(ConfigFile::key_not_found& ex)
+        {
+            cout << "read " << ex.key << " faild" << endl;
+            return false;
+        }
+        return true;
+    }
+    catch(ConfigFile::file_not_found& ex)
+    {
+        cout << "read file " << ex.filename << " faild " << endl;
+        return false;
+    }
+}
+int main(int argc, char *argv[])
+{
+    int ret = 0;
+    const long check_interval = 60;//
+    time_t last_check = 0;
+    time_t now = 0;
+    char  szVerNo[61] = {0};
+    sprintf(szVerNo, "%s.%s %s (%s %s)", argv[0], APP_USER, YKT_VERSION, __DATE__, __TIME__);
+    const char short_opts[] = "v";
+    int option;
+    while((option = getopt(argc, argv, short_opts)) != -1)
+    {
+        switch(option)
+        {
+            case 'v':
+                printf("%s\n", szVerNo);
+                return 0;
+            default:
+                printf("%s -v\n", argv[0]);
+                return -1;
+        }
+    }
+    string conf = argv[0];
+    conf = conf + ".conf";
+
+    string connectinfo;
+    string logconf;
+    if(!init_config(conf, connectinfo, logconf))
+    {
+        cout << "init_config failed!";
+        return -1;
+    }
+    if(!init_logger(logconf))
+    {
+        cout << "server init log faild" << endl;
+        return -2;
+    }
+    LOG(DEBUG, "init ok");
+    ret = ConnectDb(connectinfo.c_str());
+    if(ret)
+    {
+        LOG(ERROR, "连接数据库失败");
+        return ret;
+    }
+    LOG(DEBUG, "connect database ok");
+    memset(staticCurrentTime, 0, sizeof(staticCurrentTime));
+    memset(staticToday, 0, sizeof(staticToday));
+    while(1)
+    {
+        if(!IsDatabaseConnect())
+        {
+            LOG(INFO, "reconnect database ...");
+            ret = ConnectDb(connectinfo.c_str());
+            if(ret)
+            {
+                LOG(ERROR, "connect to database error");
+                sleep(30);
+                continue;
+            }
+        }
+        now = time(0);
+        if(now - last_check > check_interval)
+        {
+            last_check = now;
+            ret = db_getsysdatetime2(staticCurrentTime);
+            if(ret)
+                continue;
+            memcpy(staticToday, staticCurrentTime, 8);
+            DoCustSync();
+        }
+        sleep(5);
+    }
+    db_disconnect();
+    return 0;
+}
+

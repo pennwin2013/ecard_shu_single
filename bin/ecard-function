@@ -1,0 +1,11 @@
+# ecard function
+# 2011-10-27
+
+check_proc_running()
+{
+   PROGNAME=$1
+   if  ps -U $LOGNAME -o comm,pid,user | grep $PROGNAME > /dev/null 2>&1; then
+        return 0
+   fi
+   return 1
+}

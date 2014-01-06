@@ -1,0 +1,922 @@
+/* --------------------------------------------
+ * 创建日期: 2013-05-21
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:  批处理程序(批量冻结和销户程序)
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include "pubdef.h"
+#include "errdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "interfacefunc.h"
+#include "transfunc.h"
+#include <vector>
+#include "ConfigFile.h"
+#include "logger_imp.h"
+#include "ecarddbcfg.h"
+
+EXEC SQL INCLUDE SQLCA;
+typedef struct
+{
+    int applyid;
+    char stuempno[31];
+} TMySno;
+typedef vector<TMySno> SNOVECT;
+static bool init_config(string pathname, string& connectinfo, string& logconf)
+{
+    try
+    {
+        ConfigFile config(pathname);
+        try
+        {
+            config.readInto(connectinfo, "connectinfo");
+            config.readInto(logconf, "logconf");
+        }
+        catch(ConfigFile::key_not_found& ex)
+        {
+            cout << "read " << ex.key << " faild" << endl;
+            return false;
+        }
+        return true;
+    }
+    catch(ConfigFile::file_not_found& ex)
+    {
+        cout << "read file " << ex.filename << " faild " << endl;
+        return false;
+    }
+}
+//取得批量销户的学号名单
+static int GetSnoList(SNOVECT& SnoVect, int v_status)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        int applyid = 0;
+        char stuempno[31] = {0};
+        int status = v_status;
+        short indicator = 0;
+    EXEC SQL END DECLARE SECTION;
+    int ret = 0;
+    if(SnoVect.size())
+        SnoVect.clear();
+    SQLCODE = 0;
+    EXEC SQL DECLARE closeapply_cur CURSOR FOR
+        SELECT
+          applyid,
+          stuempno
+        FROM t_closeapply
+            WHERE status=:status
+        order by applyid;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN closeapply_cur;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    int row = 0;
+    TMySno MySno;
+    while(1)
+    {
+        applyid = 0;
+        stuempno[0] = 0;
+        EXEC SQL FETCH closeapply_cur INTO
+        :applyid:indicator,
+        :stuempno:indicator;
+        if(SQLCODE)
+        {
+            ret = SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE closeapply_cur;
+            if(DB_NOTFOUND == ret)
+            {
+                break;
+            }
+            else
+                return E_DB_QRY;
+        }
+        row++;
+        memset(&MySno, 0, sizeof(MySno));
+        MySno.applyid = applyid;
+        des2src(MySno.stuempno, stuempno);
+        SnoVect.push_back(MySno);
+    }
+    return 0;
+}
+//取得批量销户的卡名单
+static int GetCloseCardList(vector<int>& cardnoVect)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        int cardno = 0;
+        short indicator = 0;
+    EXEC SQL END DECLARE SECTION;
+    int ret = 0;
+    if(cardnoVect.size())
+        cardnoVect.clear();
+    SQLCODE = 0;
+    EXEC SQL DECLARE closetask_cur CURSOR FOR
+        SELECT
+          cardno
+        FROM t_closetask
+        WHERE status=0 and plandate>0 and plandate<=(select to_number(to_char(sysdate,'YYYYMMDD')) from dual)
+        order by cardno;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN closetask_cur;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    int row = 0;
+    while(1)
+    {
+        cardno = 0;
+        EXEC SQL FETCH closetask_cur INTO
+        :cardno:indicator;
+        if(SQLCODE)
+        {
+            ret = SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE closetask_cur;
+            if(DB_NOTFOUND == ret)
+            {
+                break;
+            }
+            else
+                return E_DB_QRY;
+        }
+        row++;
+        cardnoVect.push_back(cardno);
+    }
+    return 0;
+}
+//批量冻结卡
+int GetCardlistByStuempno(const char* stuempno, vector<int>& cardlist)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        char hi_stuno[31] = {0};                //学工号
+        int ho_cardno = 0;              //交易卡号..
+        short   h_idr = 0;
+    EXEC SQL END DECLARE SECTION;
+    SQLCODE = 0;
+    int ret = 0;
+    des2src(hi_stuno, stuempno);    //学工号
+    if(cardlist.size())
+        cardlist.clear();
+    EXEC SQL DECLARE getcardlist_cur CURSOR FOR
+    select a.cardno from t_card a,t_customer b
+    where a.custid=b.custid and b.stuempno = :hi_stuno
+    and b.status='1' and  a.status='1';
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__, __LINE__, &sqlca);
+        LOG(ERROR, "Read t_card error,sqlcode=[" << SQLCODE << "],stuempno=[" << hi_stuno << "]");
+        if(DB_NOTFOUND == SQLCODE)
+            return E_NOTEXIST_CARDNO;
+        else
+            return E_DB_CARD_R;
+    }
+    EXEC SQL  OPEN getcardlist_cur;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1)
+    {
+        ho_cardno = 0;
+        EXEC SQL FETCH getcardlist_cur INTO
+        :ho_cardno:h_idr;
+        if(SQLCODE)
+        {
+            ret = SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE getcardlist_cur;
+            if(DB_NOTFOUND == ret)
+                break;
+            else
+                return E_DB_CARD_R;
+        }
+        cardlist.push_back(ho_cardno);
+    }
+    return 0;
+}
+static int FrozeCard(int applyid, int plandate, int cardno)
+{
+    int ret = 0;
+    CAccTrans& ats = CAccTrans::GetInst();
+    TRANS& trans = ats.trans;
+    ret = ats.Reset();
+    if(ret)
+        return ret;
+    ats.trans.termid = TERMID_SVR;
+    ats.trans.transcode = TC_CARDFROZE;
+    trans.cardno = cardno;
+    T_t_card tCard;
+    memset(&tCard, 0, sizeof(tCard));
+    ret = DB_t_card_read_lock_by_cur_and_cardno(cardno, &tCard);
+    if(ret)
+    {
+        LOG(ERROR, "cardno[" << cardno << "]");
+        if(DB_NOTFOUND == ret)
+            return ERRINFO(E_NOTEXIST_CARDNO, cardno);
+        else
+            return E_DB_CARD_R;
+    }
+    if(STATUS_CLOSING == tCard.status[0])
+    {
+        DB_t_card_free_lock_by_cur();
+        return 0;
+    }
+    des2src(trans.showcardno, tCard.showcardno);
+    if(tCard.status[0] != STATUS_NORMAL)
+    {
+        DB_t_card_free_lock_by_cur();
+        if(STATUS_DELETE == tCard.status[0])
+            return ERRINFO(E_CARD_LOGOUT, trans.cardno);
+        else
+        {
+            ERRTIP("卡状态错误");
+            return E_COMMON_ERR;
+        }
+    }
+    int iFroze = 0;
+    if('1' == tCard.frozeflag[0])
+    {
+        iFroze = 1;
+    }
+    else
+    {
+    ret = getCardVerNo(tCard.cardverno);
+    if(ret)
+    {
+        DB_t_card_free_lock_by_cur();
+        return ret;
+    }
+        tCard.frozeflag[0] = '1';
+        des2src(tCard.frozedate, trans.accdate);
+    }
+    des2src(tCard.lastsaved, trans.sysdatetime);
+    tCard.status[0] = STATUS_CLOSING;
+    ret = DB_t_card_update_lock_by_cur(&tCard);
+    if(ret)
+    {
+        LOG(ERROR, "cardno[" << cardno << "]");
+        if(DB_NOTFOUND == ret)
+            return E_NOTEXIST_CARDNO;
+        else
+            return E_DB_CARD_U;
+    }
+    T_t_closetask closetask;
+    memset(&closetask, 0, sizeof(closetask));
+    closetask.cardno = cardno;
+    closetask.applyid = applyid;
+    closetask.custid = tCard.custid;
+    closetask.frozedate = atol(tCard.frozedate);
+    closetask.plandate = plandate;
+    ret = DB_t_closetask_add(&closetask);
+    if(ret)
+    {
+        DB_t_card_free_lock_by_cur();
+        LOG(ERROR, "cardno=[" << cardno << "],ret=" << ret);
+        return ret;
+    }
+    //已经冻结过就不再重复冻结
+    if(iFroze > 0)
+        return 0;
+    trans.custid = tCard.custid;
+    T_t_customer customer;
+    memset(&customer, 0, sizeof(customer));
+    if(tCard.custid)
+    {
+        ret = DB_t_customer_read_by_custid(tCard.custid, &customer);
+        if(ret)
+        {
+            if(DB_NOTFOUND == ret)
+                return E_NOTEXIST_CUSTOMER;
+            else
+                return E_DB_CUSTOMER_R;
+        }
+        trans.custid = tCard.custid;
+        des2src(trans.custname, customer.custname);
+        des2src(trans.stuempno, customer.stuempno);
+    }
+    //修改以前的解冻记录为删除状态
+    UpdCardVerStatus(cardno, CARDVERTYPE_CARDUNFROZE);
+    //更新系统黑名单最大版本号
+    ret = SetSysParaVal(SYSPARA_MAXBLACKCARDVERNO, tCard.cardverno);
+    if(ret)
+    {
+        return ret;
+    }
+    T_t_cardver cardver;
+    memset(&cardver, 0, sizeof(cardver));
+    cardver.cardno = tCard.cardno;
+    des2src(cardver.accdate, ats.trans.accdate);
+    cardver.termid = trans.termid;
+    cardver.termseqno = trans.termseqno;
+    cardver.cardno = tCard.cardno;
+    des2src(cardver.cardphyid, tCard.cardphyid);
+    des2src(cardver.stuempno, customer.stuempno);
+    cardver.cardvertype = CARDVERTYPE_CARDFROZE;
+    cardver.adddelflag = ADDDELFLAG_ADD;
+    cardver.status[0] = STATUS_NORMAL;
+    des2src(cardver.cardverno, tCard.cardverno);
+    ret = DB_t_cardver_add(&cardver);
+    if(ret)
+    {
+        if(DB_REPEAT == ret)
+            return E_DB_CARDVER_E;
+        else
+            return E_DB_CARDVER_I;
+    }
+    ret = ats.GetTermSeqno();
+    if(ret)
+        return ret;
+    T_t_transdtl transdtl;
+    memset(&transdtl, 0, sizeof(transdtl));
+
+    transdtl.cardno = ats.trans.cardno;
+    transdtl.custid = ats.trans.custid;
+    des2src(transdtl.custname, ats.trans.custname);
+    des2src(transdtl.stuempno, ats.trans.stuempno);
+    strcpy(transdtl.transdate, ats.trans.transdate);
+    strcpy(transdtl.transtime, ats.trans.transtime);
+    strcpy(transdtl.accdate, ats.trans.accdate);
+    strcpy(transdtl.acctime, ats.trans.acctime);
+    transdtl.termid = ats.trans.termid;
+    transdtl.termseqno = ats.trans.termseqno;
+    transdtl.transcode = ats.trans.transcode;
+    transdtl.amount = ats.trans.totaltransamt;
+    transdtl.managefee = ats.trans.totalfeeamt;
+    des2src(transdtl.opercode, ats.trans.opercode);
+    transdtl.status = TRANSTATUS_SUCC;
+    transdtl.errcode = 0;
+    des2src(transdtl.showcardno, ats.trans.showcardno);
+    des2src(transdtl.remark, ats.trans.remark);
+    ret = ats.GetNewRefno(ats.trans.refno);
+    if(ret)
+        return ret;
+    des2src(transdtl.refno, ats.trans.refno);
+    ret = DB_t_transdtl_add(&transdtl);
+    if(ret)
+    {
+        if(DB_REPEAT == ret)
+            return E_DB_TRANSDTL_E;
+        else
+            return E_DB_TRANSDTL_I;
+    }
+    return 0;
+}
+int BatchFrozeCard()
+{
+    int ret = 0;
+    CAccTrans& ats = CAccTrans::GetInst();
+    strcpy(ats.trans.remark, "批量销户冻结");
+    SNOVECT  snovect;
+    ret = GetSnoList(snovect, CLOSEAPPLYSTATUS_CHECKED);
+    if(ret)
+    {
+        LOG(ERROR, "GetSnoList ret=" << ret);
+        return ret;
+    }
+    if(snovect.empty())
+    {
+        LOG(INFO, "GetSnoList no data");
+        return 0;
+    }
+    LOG(DEBUG, "get sno count:" << snovect.size());
+    char paraval[61] = {0};
+    ret = GetSysParaVal(SYSPARA_RENEWCARDDAYCNT, paraval);
+    if(ret)
+    {
+        LOG(ERROR, "GetSysParaVal ret=" << ret);
+        return ret;
+    }
+    int iRenewCardDayCnt = atoi(paraval);
+    if(iRenewCardDayCnt < 7)
+        iRenewCardDayCnt = 7;
+    char sysdate[9] = {0};
+    char enddate[9] = {0};
+    ret = db_getsysdate(sysdate);
+    if(ret)
+        return ret;
+    ret = calcEndDate(sysdate, iRenewCardDayCnt, enddate);
+    if(ret)
+    {
+        LOG(ERROR, "calcEndDate ret=" << ret);
+        return ret;
+    }
+    int plandate = atoi(enddate);
+    for(size_t i = 0; i < snovect.size(); i++)
+    {
+        vector<int> cardlist;
+        ret = GetCardlistByStuempno(snovect[i].stuempno, cardlist);
+        if(ret)
+        {
+            LOG(ERROR, "GetCardlistByStuempno ret=" << ret);
+            return ret;
+        }
+        for(size_t k = 0; k < cardlist.size(); k++)
+        {
+            ret = FrozeCard(snovect[i].applyid, plandate, cardlist[k]);
+            if(ret)
+            {
+                LOG(ERROR, "DoFrozeCard ret=" << ret << ",cardno=" << cardlist[k]);
+                return ret;
+            }
+        }
+        T_t_closeapply closeapply;
+        memset(&closeapply, 0, sizeof(closeapply));
+        ret = DB_t_closeapply_read_lock_by_c0_and_applyid(snovect[i].applyid, &closeapply);
+        if(ret)
+        {
+            LOG(ERROR, "DB_t_closeapply_read_lock_by_c0_and_id ret=" << ret << ",applyid=" << snovect[i].applyid);
+            if(DB_NOTFOUND == ret)
+                return E_DB_CLOSEAPPLY_N;
+            else
+                return E_DB_CLOSEAPPLY_R;
+        }
+        if(cardlist.empty())
+        {
+            closeapply.status = CLOSEAPPLYSTATUS_ERROR;
+            strcpy(closeapply.remark, "该学号没有待销户的卡");
+        }
+        else
+        {
+            closeapply.status = CLOSEAPPLYSTATUS_PROCESS;
+            strcpy(closeapply.remark, "批量销户冻结成功");
+        }
+        ret = DB_t_closeapply_update_lock_by_c0(&closeapply);
+        if(ret)
+        {
+            return E_DB_CLOSEAPPLY_U;
+        }
+        ret = db_commit();
+        if(ret)
+        {
+            LOG(ERROR, "commit ret=" << ret);
+            return ret;
+        }
+    }
+    return 0;
+}
+//领取所有未领取补助
+static int DoUnGetSubSidy(int custid, int& subsidyamt)
+{
+    int ret;
+    CAccTrans& ats = CAccTrans::GetInst();
+    TRANS& trans = ats.trans;
+    subsidyamt = 0;
+    char subsidystatus[2] = {0};
+    subsidystatus[0] = SUBSIDY_STATUS_PUT;
+    ret = DB_t_subsidy_open_select_for_update_by_c3_and_status_and_custid(subsidystatus, custid);
+    if(ret)
+    {
+        return E_DB_SUBSIDY_R;
+    }
+    while(1)
+    {
+        T_t_subsidy subsidy;
+        memset(&subsidy, 0, sizeof subsidy);
+        ret = DB_t_subsidy_fetch_select_by_c3(&subsidy);
+        if(ret)
+        {
+            if(DB_NOTFOUND == ret)
+                break;
+            else
+                return E_DB_SUBSIDY_R;
+        }
+        if(subsidy.subsidymode != 1)
+        {
+            continue;
+        }
+        des2src(subsidy.getdate, ats.trans.accdate);
+        des2src(subsidy.gettime, ats.trans.acctime);
+        subsidy.status[0] = SUBSIDY_STATUS_GET;
+        ret = DB_t_subsidy_update_select_by_c3(&subsidy);
+        if(ret)
+        {
+            return E_DB_SUBSIDY_U;
+        }
+        subsidyamt += D2I(subsidy.amount * 100.0);
+    }
+    if(subsidyamt < 0)
+    {
+        subsidyamt = 0;
+        return 0;
+    }
+    if(subsidyamt > 0)
+    {
+        trans.inputamt = subsidyamt / 100.0;
+        trans.unusedamt = trans.inputamt;
+        trans.transamt = trans.unusedamt;
+        ats.trans.transtype = TRANSTYPE_BATCLOSERETSUBSIDY;
+        ret = ats.DoTransByTransType();
+        if(ret)
+            return ret;
+        ret = ats.doTransEnd();
+        if(ret)
+            return ret;
+    }
+    return 0;
+}
+static int CloseCard(T_t_closetask& closetask)
+{
+    //检查卡
+    int ret = 0;
+    CAccTrans& ats = CAccTrans::GetInst();
+    TRANS& trans = ats.trans;
+    ret = ats.Reset();
+    if(ret)
+        return ret;
+    ats.trans.termid = TERMID_SVR;
+    ats.trans.transcode = TC_BATCLOSE;
+    ret = ats.GetTermSeqno();
+    if(ret)
+        return ret;
+    trans.cardno = closetask.cardno;
+    T_t_card tCard;
+    memset(&tCard, 0, sizeof(tCard));
+    ret = DB_t_card_read_lock_by_cur_and_cardno(trans.cardno, &tCard);
+    if(ret)
+    {
+        LOG(ERROR, "ret=" << ret << ",cardno[" << trans.cardno << "]");
+        if(DB_NOTFOUND == ret)
+            return E_NOTEXIST_CARDNO;
+        else
+            return E_DB_CARD_R;
+    }
+    trans.cardtype = tCard.cardtype;
+    if(tCard.status[0] != STATUS_CLOSING)
+    {
+        LOG(ERROR, "cardno=" << trans.cardno << " status error");
+        DB_t_card_free_lock_by_cur();
+        return E_CARDSTATUS;
+    }
+    tCard.status[0] = STATUS_DELETE;
+    ret = getCardVerNo(tCard.cardverno);
+    if(ret)
+    {
+        DB_t_card_free_lock_by_cur();
+        return ret;
+    }
+    strcpy(tCard.closedate, trans.transdate);
+    des2src(tCard.lastsaved, trans.sysdatetime);
+    ret = DB_t_card_update_lock_by_cur(&tCard);
+    if(ret)
+    {
+        LOG(ERROR, "cardno[" << tCard.cardno << "]");
+        if(DB_NOTFOUND == ret)
+            return ERRINFO(E_NOTEXIST_CARDNO, tCard.cardno);
+        else
+            return E_DB_CARD_U;
+    }
+    trans.custid = tCard.custid;
+    trans.feetype = tCard.feetype;
+    des2src(trans.showcardno, tCard.showcardno);
+    des2src(trans.cardaccno, tCard.accno);
+
+    T_t_customer tCustomer;
+    memset(&tCustomer, 0, sizeof(tCustomer));
+    if(trans.custid > 0)
+    {
+        ret = DB_t_customer_read_lock_by_cur_and_custid(trans.custid, &tCustomer);
+        if(ret)
+        {
+            if(DB_NOTFOUND == ret)
+                return E_NOTEXIST_CUSTOMER;
+            else
+                return E_DB_CUSTOMER_R;
+        }
+        if(tCustomer.holdcardcnt)
+        {
+            tCustomer.holdcardcnt--;
+        }
+        des2src(tCustomer.lastsaved, trans.sysdatetime);
+        ret = DB_t_customer_update_lock_by_cur(&tCustomer);
+        if(ret)
+        {
+            if(DB_NOTFOUND == ret)
+                return ERRINFO(E_NOTEXIST_CUSTOMER, trans.custid);
+            else
+                return E_DB_CUSTOMER_U;
+        }
+        des2src(trans.custname, tCustomer.custname);
+        des2src(trans.stuempno, tCustomer.stuempno);
+    }
+    ////添加卡版本号记录
+    T_t_cardver cardver;
+    memset(&cardver, 0, sizeof(cardver));
+    cardver.cardno = tCard.cardno;
+    des2src(cardver.accdate, ats.trans.accdate);
+    cardver.termid = trans.termid;
+    cardver.termseqno = trans.termseqno;
+    cardver.cardno = tCard.cardno;
+    cardver.status[0] = STATUS_NORMAL;
+    des2src(cardver.cardphyid, tCard.cardphyid);
+    des2src(cardver.stuempno, trans.stuempno);
+    cardver.cardvertype = CARDVERTYPE_CARDCLOSE;
+    des2src(cardver.cardverno, tCard.cardverno);
+    ret = DB_t_cardver_add(&cardver);
+    if(ret)
+    {
+        if(DB_REPEAT == ret)
+            return E_DB_CARDVER_E;
+        else
+            return E_DB_CARDVER_I;
+    }
+    //读取帐户信息
+    T_t_account tCardAccount;
+    memset(&tCardAccount, 0, sizeof(tCardAccount));
+    ret = DB_t_account_read_lock_by_c0_and_accno(tCard.accno, &tCardAccount);
+    if(ret)
+    {
+        if(DB_NOTFOUND == ret)
+            return ERRINFO(E_NOTEXIST_CARDACCNO, tCard.accno);
+        else
+            return E_DB_ACCOUNT_R;
+    }
+    if(tCardAccount.status[0] != STATUS_NORMAL)
+    {
+        return ERRINFO(E_CARDACC_LOGOUT, tCardAccount.accno);
+    }
+    DB_t_account_free_lock_by_c0();
+    strcpy(trans.cardaccno, tCardAccount.accno);
+    //押金处理
+    if(tCardAccount.foregift > 0)
+    {
+        trans.inputamt = tCardAccount.foregift;
+        trans.unusedamt = trans.inputamt;
+        trans.transamt = tCardAccount.foregift;
+        trans.fundtype = 0; //0表示从帐户扣
+        //批量销户不退押金
+        ats.trans.transtype = TRANSTYPE_FOREGIFT2COSTFEE;
+        ret = ats.DoTransByTransType();
+        if(ret)
+            return ret;
+        ret = ats.doTransEnd();
+        if(ret)
+            return ret;
+    }
+    if(amtcmp(tCardAccount.balance, 0) > 0)
+    {
+        //以小为准退
+        double dRetAmt = tCardAccount.cardbal;
+        if(amtcmp(tCardAccount.cardbal, tCardAccount.balance) > 0)
+            dRetAmt = tCardAccount.balance;
+        if(dRetAmt < 0)
+            dRetAmt = 0;
+        trans.inputamt = dRetAmt;
+        trans.unusedamt = trans.inputamt;
+        trans.transamt = trans.unusedamt;
+        trans.feetype = tCard.feetype;
+        trans.cardtype = tCard.cardtype;
+        strcpy(trans.cardaccno, tCardAccount.accno);
+        ats.trans.transtype = TRANSTYPE_BATCLOSERETCARDBAL;
+        ret = ats.DoTransByTransType();
+        if(ret)
+            return ret;
+        ret = ats.doTransEnd();
+        if(ret)
+            return ret;
+        closetask.cardamt = D2I(dRetAmt * 100);
+    }
+    memset(&tCardAccount, 0, sizeof(tCardAccount));
+    ret = DB_t_account_read_lock_by_c0_and_accno(tCard.accno, &tCardAccount);
+    if(ret)
+    {
+        if(DB_NOTFOUND == ret)
+            return ERRINFO(E_NOTEXIST_CARDACCNO, tCard.accno);
+        else
+            return E_DB_ACCOUNT_R;
+    }
+    tCardAccount.status[0] = STATUS_DELETE;
+    des2src(tCardAccount.closedate, trans.accdate);
+    ret = DB_t_account_update_lock_by_c0(&tCardAccount);
+    if(ret)
+    {
+        return E_DB_ACCOUNT_U;
+    }
+    /*
+    ret = DoUnGetSubSidy(trans.custid, closetask.subsidyamt);
+    if(ret)
+    {
+        LOG(ERROR, "DoUnGetSubSidy ret=" << ret << ",custid=" << trans.custid);
+        return ret;
+    }
+    */
+    T_t_transdtl transdtl;
+    memset(&transdtl, 0, sizeof(transdtl));
+    ret = ats.GetNewRefno(ats.trans.refno);
+    if(ret)
+        return ret;
+    des2src(transdtl.refno, ats.trans.refno);
+    strcpy(transdtl.transdate, trans.transdate);
+    strcpy(transdtl.transtime, trans.transtime);
+    strcpy(transdtl.accdate, trans.accdate);
+    strcpy(transdtl.acctime, trans.acctime);
+    transdtl.termid = trans.termid;
+    transdtl.termseqno = trans.termseqno;
+    transdtl.amount = trans.totaltransamt;
+    transdtl.managefee = 0;
+    transdtl.transcode = trans.transcode;
+    des2src(transdtl.opercode, trans.opercode);
+    transdtl.status = TRANSTATUS_SUCC;
+    transdtl.revflag = 0;
+    transdtl.errcode = 0;
+    transdtl.cardno = trans.cardno;
+    transdtl.custid = trans.custid;
+    des2src(transdtl.showcardno, trans.showcardno);
+    des2src(transdtl.custname, trans.custname);
+    des2src(transdtl.stuempno, trans.stuempno);
+    ret = DB_t_transdtl_add(&transdtl);
+    if(ret)
+    {
+        if(DB_REPEAT == ret)
+            return E_DB_TRANSDTL_E;
+        else
+            return E_DB_TRANSDTL_I;
+    }
+    return 0;
+}
+int BatchCloseCard()
+{
+    int ret = 0;
+    CAccTrans& ats = CAccTrans::GetInst();
+    strcpy(ats.trans.remark, "批量销户");
+    vector<int>  CardnoVect;
+    ret = GetCloseCardList(CardnoVect);
+    if(ret)
+    {
+        LOG(ERROR, "GetCloseCardList ret=" << ret);
+        return ret;
+    }
+    if(CardnoVect.empty())
+    {
+        LOG(INFO, "GetCloseCardList no data");
+        return 0;
+    }
+    ret = ats.CheckCfgUpdate();
+    if(ret)
+        return ret;
+    for(size_t i = 0; i < CardnoVect.size(); i++)
+    {
+        T_t_closetask closetask;
+        memset(&closetask, 0, sizeof(closetask));
+        closetask.cardno = CardnoVect[i];
+        ret = DB_t_closetask_read_lock_by_c0_and_cardno(closetask.cardno, &closetask);
+        if(ret)
+        {
+            LOG(ERROR, "DB_t_closetask_read_lock_by_c0_and_cardno ret=" << ret << ",cardno=" << closetask.cardno);
+            return ret;
+        }
+        if(1 == closetask.status)
+        {
+            DB_t_closetask_free_lock_by_c0();
+            db_rollback();
+            continue;
+        }
+        ret = CloseCard(closetask);
+        if(ret)
+        {
+            LOG(ERROR, "closecard ret=" << ret << ",cardno=" << CardnoVect[i]);
+            DB_t_closetask_free_lock_by_c0();
+            db_rollback();
+            memset(&closetask, 0, sizeof(closetask));
+            closetask.cardno = CardnoVect[i];
+            ret = DB_t_closetask_read_lock_by_c0_and_cardno(closetask.cardno, &closetask);
+            if(ret)
+            {
+                LOG(ERROR, "DB_t_closetask_read_lock_by_c0_and_cardno ret=" << ret << ",cardno=" << closetask.cardno);
+                return ret;
+            }
+            closetask.status = 2;
+            sprintf(closetask.remark, "close failed,ret=%d", ret);
+        }
+        else
+        {
+            closetask.status = 1;
+            closetask.closedate = atoi(ats.trans.accdate);
+            strcpy(closetask.remark, "销户成功");
+        }
+        ret = DB_t_closetask_update_lock_by_c0(&closetask);
+        if(ret)
+        {
+            LOG(ERROR, "DB_t_closetask_update_lock_by_c0 ret=" << ret << ",cardno=" << closetask.cardno);
+            return ret;
+        }
+        ret = db_commit();
+        if(ret)
+        {
+            LOG(ERROR, "commit ret=" << ret);
+            return ret;
+        }
+    }
+    return 0;
+}
+int main(int argc, char *argv[])
+{
+    int ret = 0;
+    const long check_interval = 3600;//1小时
+    time_t last_check = - check_interval;
+    time_t now = 0;
+    char  szVerNo[61] = {0};
+    sprintf(szVerNo, "%s.%s %s (%s %s)", argv[0], APP_USER, YKT_VERSION, __DATE__, __TIME__);
+    const char short_opts[] = "v";
+    int option;
+    while((option = getopt(argc, argv, short_opts)) != -1)
+    {
+        switch(option)
+        {
+            case 'v':
+                printf("%s\n", szVerNo);
+                return 0;
+            default:
+                printf("%s -v\n", argv[0]);
+                return -1;
+        }
+    }
+    string conf = argv[0];
+    conf = conf + ".conf";
+
+    string connectinfo;
+    string logconf;
+    if(!init_config(conf, connectinfo, logconf))
+    {
+        cout << "init_config failed!";
+        return -1;
+    }
+    if(!init_logger(logconf))
+    {
+        cout << "server init log faild" << endl;
+        return -2;
+    }
+    LOG(DEBUG, "init ok");
+    char errmsg[512] = {0};
+    char szConnectInfo[256];
+    bool r = edb_get_db_url(NULL, "ecard", szConnectInfo, errmsg);
+    if(!r)
+    {
+        LOG(ERROR, "读取数据库连接参数失败" << errmsg);
+        if(connectinfo.size() < 1)
+            return -3;
+        LOG(INFO, "使用本地配置文件" << conf << "中的数据库连接连接");
+        ret = ConnectDb(connectinfo.c_str());
+    }
+    else
+    {
+        connectinfo = szConnectInfo;
+        ret = ConnectDb(connectinfo.c_str());
+    }
+    if(ret)
+    {
+        LOG(ERROR, "连接数据库失败，系统启动失败");
+        return ret;
+    }
+    LOG(DEBUG, "connect database ok");
+    CAccTrans& ats = CAccTrans::GetInst();
+    ret = ats.LoadCfg();
+    if(ret)
+    {
+        LOG(ERROR, "loadcfg ret=" << ret);
+        return ret;
+    }
+    while(1)
+    {
+        ret = 0;
+        if(!IsDatabaseConnect())
+        {
+            LOG(INFO, "reconnect database ...");
+            ret = ConnectDb(connectinfo.c_str());
+            if(ret)
+            {
+                LOG(ERROR, "connect to database error");
+                sleep(30);
+                continue;
+            }
+        }
+        now = time(0);
+        if(now - last_check > check_interval)
+        {
+            last_check = now;
+            BatchFrozeCard();
+            BatchCloseCard();
+        }
+        sleep(60);
+    }
+    db_disconnect();
+    return 0;
+}

@@ -1,0 +1,44 @@
+create table t_posdata
+(
+  id number,
+  senderid number,
+  sendercode varchar2(10),
+  posphyid varchar2(20),
+  posseqno number,
+  merchno varchar2(15),
+  termno varchar2(12),
+  transdate number,
+  transtime number,
+  cardno number,
+  paycnt number,
+  cardbefbal number,
+  cardaftbal number,
+  reversed number,
+  payamt number,
+  feeamt number,
+  amount number,
+  datatype number,
+  sendtype number,
+  withpasswd number,
+  updresult number,
+  tac varchar2(8),
+  mac varchar2(8),
+  recvtime varchar2(14),
+  refno varchar2(20),
+  igntime number,
+  igncnt number,
+  status number,
+  errcode number,
+  remark varchar2(240)
+)
+begin
+action modename ykt_cur end
+action add end
+action read_by id end
+action update_by id end
+action del_by id end
+action read_lock_by c0 id end
+action update_lock_by c0 end
+action del_lock_by c0 end
+action free_lock_by c0 end
+end

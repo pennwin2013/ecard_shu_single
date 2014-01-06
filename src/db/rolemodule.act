@@ -1,0 +1,15 @@
+create table t_rolemodule
+(
+  roleid number,
+  modulecode varchar2(10),
+  updtime varchar2(14)
+)
+begin
+action modename ykt_cur end
+action add end
+action del_by roleid end
+action read_lock_by c0 roleid modulecode end
+action update_lock_by c0 end
+action del_lock_by c0 end
+action free_lock_by c0 end
+end

@@ -1,0 +1,25 @@
+create table t_operrole
+(
+  operroleid number,
+  operid number,
+  roleid number,
+  createdate number
+)
+begin
+action modename ykt_cur end
+action add end
+action read_by operroleid end
+action update_by operroleid end
+action del_by operroleid end
+action read_lock_by c0 operroleid end
+action update_lock_by c0 end
+action del_lock_by c0 end
+action free_lock_by c0 end
+action read_lock_by c1 operid roleid end
+action update_lock_by c1 end
+action del_lock_by c1 end
+action free_lock_by c1 end
+action del_by operid  end
+action del_by operid roleid end
+action del_by roleid end
+end

@@ -1,0 +1,18 @@
+create table t_devfeemanifest
+(
+feecfgid integer,
+feecfgname varchar(255),
+cfgverno integer,
+crttime varchar(14),
+updtime varchar(14),
+globalflag integer
+)
+begin 
+action modename none end
+action add end
+action del_by feecfgid end
+action read_lock_by c0 feecfgid end
+action update_lock_by c0 end
+action free_lock_by c0 end
+action read_by feecfgid end
+end

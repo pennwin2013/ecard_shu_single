@@ -1,0 +1,215 @@
+#include "clscard.h"
+#include "acctrans.h"
+#include "logger_imp.h"
+namespace ekingstar
+{
+    CCard::CCard()
+    {
+        _bLoad = false;
+        memset(&_card, 0, sizeof(_card));
+    }
+    CCard::~CCard()
+    {
+        clearCheck();
+    }
+    void CCard::attach(T_t_card& card)
+    {
+        memcpy(&_card, &card, sizeof(_card));
+        _bLoad = true;
+    }
+    int  CCard::loadCard(int cardno)
+    {
+        int ret = 0;
+        memset(&_card, 0, sizeof(_card));
+        CAccTrans& ats = CAccTrans::GetInst();
+        memset(&_card, 0, sizeof(_card));
+        ret = DB_t_card_read_by_cardno(cardno, &_card);
+        if(ret)
+        {
+            LOG(ERROR, "ret=" << ret << ",cardno[" << cardno << "]");
+            if(DB_NOTFOUND == ret)
+            {
+                return E_NOTEXIST_CARDNO;
+            }
+            else
+                return E_DB_CARD_R;
+        }
+        _bLoad = true;
+        return 0;
+    }
+    T_t_card& CCard::getCard()
+    {
+        return _card;
+    }
+    void CCard::setTransCheck()
+    {
+        _checkArray.push_back(CT_NORMAL);
+        _checkArray.push_back(CT_UNLOST);
+        _checkArray.push_back(CT_UNFROZEN);
+        _checkArray.push_back(CT_UNLOCKED);
+        _checkArray.push_back(CT_UNEXPIRED);
+        _checkArray.push_back(CT_CARDPHYID);
+    }
+    void CCard::delCheck(int item)
+    {
+        vector<int>::iterator it;
+        for(it = _checkArray.begin(); it != _checkArray.end();)
+        {
+            if(*it == item)
+            {
+                _checkArray.erase(it);
+                it = _checkArray.begin();
+            }
+            else
+                it++;
+        }
+    }
+    void CCard::clearCheck()
+    {
+        if(!_checkArray.empty())
+            _checkArray.clear();
+    }
+    void CCard::addCheck(int item)
+    {
+        _checkArray.push_back(item);
+    }
+    int CCard::checkStatus(int item)
+    {
+        switch(item)
+        {
+            case CT_NORMAL:
+                if(_card.status[0] != STATUS_NORMAL)
+                {
+                    ERRTIP("卡已注销");
+                    return E_COMMON_ERR;
+                }
+                break;
+            case CT_CLOSED:
+                if(_card.status[0] != STATUS_DELETE)
+                {
+                    ERRTIP("卡未注销");
+                    return E_COMMON_ERR;
+                }
+                break;
+            case CT_CLOSING:
+                if(_card.status[0] != STATUS_CLOSING)
+                {
+                    ERRTIP("卡状态不是待销户状态");
+                    return E_COMMON_ERR;
+                }
+                break;
+            case CT_RENEW:
+                if(_card.status[0] != STATUS_RENEW)
+                {
+                    ERRTIP("卡状态不是补办状态");
+                    return E_COMMON_ERR;
+                }
+                break;
+            case CT_INSTEAD:
+                if(_card.status[0] != STATUS_INSTEAD)
+                {
+                    ERRTIP("卡状态不是补办状态");
+                    return E_COMMON_ERR;
+                }
+                break;
+            case CT_UNLOST:
+                if(_card.lossflag[0] == '1')
+                {
+                    ERRTIP("该卡已挂失");
+                    return E_COMMON_ERR;
+                }
+                break;
+            case CT_LOST:
+                if(_card.lossflag[0] != '1')
+                {
+                    ERRTIP("该卡未挂失");
+                    return E_COMMON_ERR;
+                }
+                break;
+            case CT_UNFROZEN:
+                if(_card.frozeflag[0] == '1')
+                {
+                    ERRTIP("该卡已冻结");
+                    return E_COMMON_ERR;
+                }
+                break;
+            case CT_FROZEN:
+                if(_card.frozeflag[0] != '1')
+                {
+                    ERRTIP("该卡未冻结");
+                    return E_COMMON_ERR;
+                }
+                break;
+            case CT_UNLOCKED:
+                if(_card.lockflag[0] == '1')
+                {
+                    ERRTIP("该卡已锁定");
+                    return E_COMMON_ERR;
+                }
+                break;
+            case CT_LOCKED:
+                if(_card.lockflag[0] != '1')
+                {
+                    ERRTIP("该卡未锁定");
+                    return E_COMMON_ERR;
+                }
+                break;
+            case CT_UNBAD:
+                if(_card.badflag[0] == '1')
+                {
+                    ERRTIP("该卡已做坏卡登记");
+                    return E_COMMON_ERR;
+                }
+                break;
+            case CT_BAD:
+                if(_card.badflag[0] != '1')
+                {
+                    ERRTIP("该卡未做坏卡登记");
+                    return E_COMMON_ERR;
+                }
+                break;
+            case CT_UNEXPIRED:
+                if(strncmp(_card.expiredate, CAccTrans::GetInst().trans.accdate, 8) < 0)
+                {
+                    ERRTIP("该卡已过期");
+                    return E_COMMON_ERR;
+                }
+                break;
+            case CT_EXPIRED:
+                if(strncmp(_card.expiredate, CAccTrans::GetInst().trans.accdate, 8) >= 0)
+                {
+                    ERRTIP("该卡未过期");
+                    return E_COMMON_ERR;
+                }
+                break;
+            case CT_CARDPHYID:
+                if(strcmp(_card.cardphyid, CAccTrans::GetInst().trans.cardphyid) != 0)
+                {
+                    ERRTIP("该卡物理ID与系统不一致");
+                    return E_COMMON_ERR;
+                }
+                break;
+            default:
+                ERRTIP("未知的卡状态类型[%d]", item);
+                return E_COMMON_ERR;
+        }
+        return 0;
+    }
+    int CCard::check(bool bTransCheck)
+    {
+        CAccTrans& ats = CAccTrans::GetInst();
+        if(!_bLoad)
+        {
+            ERRTIP("初始化错误:未调用loadCard方法");
+            return E_COMMON_ERR;
+        }
+        if(bTransCheck)
+            setTransCheck();
+        for(unsigned int i = 0; i < _checkArray.size(); i++)
+        {
+            if(checkStatus(_checkArray[i]))
+                return E_COMMON_ERR;
+        }
+        return 0;
+    }
+}

@@ -1,0 +1,255 @@
+--V4.1.13 2013-12-13升级脚本
+insert into T_MODULE (MODULECODE, MODULENAME, MODULELEVEL, FUNCCODE)
+values ('1023', '在线账户', 2, null);
+insert into T_MODULE (MODULECODE, MODULENAME, MODULELEVEL, FUNCCODE)
+values ('102310', '在线账户补助导入', 3, 'F7101');
+insert into T_MODULE (MODULECODE, MODULENAME, MODULELEVEL, FUNCCODE)
+values ('102311', '在线账户补助管理', 3, 'F7102');
+insert into T_MODULE (MODULECODE, MODULENAME, MODULELEVEL, FUNCCODE)
+values ('102312', '在线账户补助审核', 3, 'F7103');
+insert into T_MODULE (MODULECODE, MODULENAME, MODULELEVEL, FUNCCODE)
+values ('102313', '在线账户交易冲正', 3, 'F7107');
+insert into T_MODULE (MODULECODE, MODULENAME, MODULELEVEL, FUNCCODE)
+values ('102314', '在线账户手工借贷', 3, 'F7108');
+insert into T_MODULE (MODULECODE, MODULENAME, MODULELEVEL, FUNCCODE)
+values ('102315', '在线账户信息查询', 3, 'F7105');
+insert into T_MODULE (MODULECODE, MODULENAME, MODULELEVEL, FUNCCODE)
+values ('102316', '在线账户明细查询', 3, 'F7106');
+commit;
+delete from T_DICTIONARY where dicttype=3;
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (3, '流水状态', '1', '未处理');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (3, '流水状态', '2', '失败');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (3, '流水状态', '3', '成功');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (3, '流水状态', '4', '已冲正');
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENAME, DICTVAL, DICTCAPTION)
+values (3, '流水状态', '5', '无效流水');
+commit;
+insert into T_DICTIONARY (DICTTYPE, DICTTYPENA
+--V4.1.12 2013-11-11升级脚本
+delete from T_MODULE where MODULECODE='10121413';
+insert into T_MODULE (MODULECODE, MODULENAME, MODULELEVEL, FUNCCODE)
+values ('10121413', '商户营业情况表', 3, 'F6027');
+commit;
+--V4.1.18 2013-11-28升级脚本
+delete from t_transcode where transcode between 6000 and 6090;
+insert into T_TRANSCODE (TRANSCODE, TRANSNAME, LOGFLAG, LIMITFLAG, FEEFLAG, TRANSFLAG, DISABLEFLAG)
+values (6010, '在线账户充值', 1, 1, 0, 1, 0);
+insert into T_TRANSCODE (TRANSCODE, TRANSNAME, LOGFLAG, LIMITFLAG, FEEFLAG, TRANSFLAG, DISABLEFLAG)
+values (6020, '在线账户补助', 1, 1, 0, 1, 0);
+insert into T_TRANSCODE (TRANSCODE, TRANSNAME, LOGFLAG, LIMITFLAG, FEEFLAG, TRANSFLAG, DISABLEFLAG)
+values (6050, '在线账户转一卡通', 1, 1, 0, 1, 0);
+insert into T_TRANSCODE (TRANSCODE, TRANSNAME, LOGFLAG, LIMITFLAG, FEEFLAG, TRANSFLAG, DISABLEFLAG)
+values (6060, '在线账户支付', 1, 1, 0, 1, 0);
+insert into T_TRANSCODE (TRANSCODE, TRANSNAME, LOGFLAG, LIMITFLAG, FEEFLAG, TRANSFLAG, DISABLEFLAG)
+values (6080, '在线账户交易冲正', 1, 1, 0, 1, 0);
+insert into T_TRANSCODE (TRANSCODE, TRANSNAME, LOGFLAG, LIMITFLAG, FEEFLAG, TRANSFLAG, DISABLEFLAG)
+values (6090, '在线账户调账', 1, 1, 0, 1, 0);
+
+delete from T_TRANSTYPE where transtype between 241 and 255;
+insert into T_TRANSTYPE (TRANSTYPE, TRANSNAME, DISPLAYFLAG, USEFLAG)
+values (241, '在线账户充值', '0', '1');
+insert into T_TRANSTYPE (TRANSTYPE, TRANSNAME, DISPLAYFLAG, USEFLAG)
+values (242, '转账(卡到电子帐户)', '0', '1');
+insert into T_TRANSTYPE (TRANSTYPE, TRANSNAME, DISPLAYFLAG, USEFLAG)
+values (243, '电子账户圈存转账', '0', '1');
+insert into T_TRANSTYPE (TRANSTYPE, TRANSNAME, DISPLAYFLAG, USEFLAG)
+values (245, '下发在线账户补助', '0', '1');
+insert into T_TRANSTYPE (TRANSTYPE, TRANSNAME, DISPLAYFLAG, USEFLAG)
+values (251, '在线账户取款', '0', '1');
+insert into T_TRANSTYPE (TRANSTYPE, TRANSNAME, DISPLAYFLAG, USEFLAG)
+values (252, '转账(在线账户转一卡通)', '0', '1');
+insert into T_TRANSTYPE (TRANSTYPE, TRANSNAME, DISPLAYFLAG, USEFLAG)
+values (253, '在线账户支付交易', '0', '1');
+insert into T_TRANSTYPE (TRANSTYPE, TRANSNAME, DISPLAYFLAG, USEFLAG)
+values (255, '在线账户手工借贷', '0', '1');
+
+delete from T_CFGSPLIT where transtype between 241 and 255;
+insert into T_CFGSPLIT (TRANSTYPE, FUNDTYPE, OFFLINEFLAG, USECARDFLAG, CALCCARDBAL, DRACCFLAG, DRSUBJNO, DRACCNO, CRACCFLAG, CRSUBJNO, CRACCNO, SUMMARY)
+values (241, 0, 0, 0, 0, 'I', '', '', 'E', '2003', null, '在线帐户充值');
+insert into T_CFGSPLIT (TRANSTYPE, FUNDTYPE, OFFLINEFLAG, USECARDFLAG, CALCCARDBAL, DRACCFLAG, DRSUBJNO, DRACCNO, CRACCFLAG, CRSUBJNO, CRACCNO, SUMMARY)
+values (245, 0, 0, 1, 1, 'I', '', null, 'E', '2003', null, '在线账户补助');
+insert into T_CFGSPLIT (TRANSTYPE, FUNDTYPE, OFFLINEFLAG, USECARDFLAG, CALCCARDBAL, DRACCFLAG, DRSUBJNO, DRACCNO, CRACCFLAG, CRSUBJNO, CRACCNO, SUMMARY)
+values (251, 0, 0, 0, 0, 'E', '2003', null, 'N', '1001', '1001', '电子账户取款');
+insert into T_CFGSPLIT (TRANSTYPE, FUNDTYPE, OFFLINEFLAG, USECARDFLAG, CALCCARDBAL, DRACCFLAG, DRSUBJNO, DRACCNO, CRACCFLAG, CRSUBJNO, CRACCNO, SUMMARY)
+values (252, 0, 0, 1, 1, 'E', '2003', null, 'C', '2001', null, '在线账户转账');
+insert into T_CFGSPLIT (TRANSTYPE, FUNDTYPE, OFFLINEFLAG, USECARDFLAG, CALCCARDBAL, DRACCFLAG, DRSUBJNO, DRACCNO, CRACCFLAG, CRSUBJNO, CRACCNO, SUMMARY)
+values (253, 0, 0, 1, 1, 'E', '2003', null, 'S', '2004', null, '在线账户支付');
+insert into T_CFGSPLIT (TRANSTYPE, FUNDTYPE, OFFLINEFLAG, USECARDFLAG, CALCCARDBAL, DRACCFLAG, DRSUBJNO, DRACCNO, CRACCFLAG, CRSUBJNO, CRACCNO, SUMMARY)
+values (255, 0, 0, 1, 1, 'I', '', null, 'I', '', null, '在线账户手工借贷');
+commit;
+
+
+drop table T_NETACC;
+drop table T_NETDTL;
+
+CREATE TABLE T_NETACC  (
+   ACCNO                VARCHAR2(10)                    NOT NULL,
+   ACCNAME              VARCHAR2(60),
+   SUBJNO               VARCHAR2(10),
+   ACCPWD               VARCHAR2(64),
+   CUSTID               NUMBER(9)                       NOT NULL,
+   STOPPAYFLAG          NUMBER(9),
+   STATUS               CHAR(1)                         NOT NULL,
+   YDAYBAL              NUMBER(15,2),
+   BALANCE              NUMBER(15,2)                    NOT NULL,
+   AVAILBAL             NUMBER(15,2)                    NOT NULL,
+   FROZEBAL             NUMBER(15,2)                    NOT NULL,
+   LASTTRANSDATE        VARCHAR2(8),
+   LASTACCDATE          VARCHAR2(8),
+   OPENDATE             VARCHAR2(8)                     NOT NULL,
+   CLOSEDATE            VARCHAR2(8)
+);
+
+COMMENT ON COLUMN T_NETACC.ACCNO IS
+'账号';
+
+COMMENT ON COLUMN T_NETACC.ACCNAME IS
+'帐户名';
+
+COMMENT ON COLUMN T_NETACC.SUBJNO IS
+'科目号';
+
+COMMENT ON COLUMN T_NETACC.ACCPWD IS
+'帐户密码';
+
+COMMENT ON COLUMN T_NETACC.CUSTID IS
+'客户号';
+
+COMMENT ON COLUMN T_NETACC.STOPPAYFLAG IS
+'止付标志';
+
+COMMENT ON COLUMN T_NETACC.STATUS IS
+'状态';
+
+COMMENT ON COLUMN T_NETACC.YDAYBAL IS
+'昨日余额';
+
+COMMENT ON COLUMN T_NETACC.BALANCE IS
+'帐户余额';
+
+COMMENT ON COLUMN T_NETACC.AVAILBAL IS
+'可用余额';
+
+COMMENT ON COLUMN T_NETACC.FROZEBAL IS
+'冻结余额';
+
+COMMENT ON COLUMN T_NETACC.LASTTRANSDATE IS
+'上次交易日期';
+
+COMMENT ON COLUMN T_NETACC.LASTACCDATE IS
+'上次清算日期';
+
+COMMENT ON COLUMN T_NETACC.OPENDATE IS
+'开户日期';
+
+COMMENT ON COLUMN T_NETACC.CLOSEDATE IS
+'销户日期';
+
+ALTER TABLE T_NETACC
+   ADD CONSTRAINT PK_T_NETACC PRIMARY KEY (ACCNO);
+
+/*==============================================================*/
+/* Index: UNIQ_NETACC_CUSTID                                    */
+/*==============================================================*/
+CREATE UNIQUE INDEX UNIQ_NETACC_CUSTID ON T_NETACC (
+   CUSTID ASC
+)
+TABLESPACE TS_YKT_HIS;
+
+
+CREATE TABLE T_NETDTL  (
+   ACCDATE              NUMBER(8)                       NOT NULL,
+   REFNO                VARCHAR2(20)                    NOT NULL,
+   TERMID               NUMBER(9),
+   TERMSEQNO            NUMBER(9),
+   TERMDATE             NUMBER(8),
+   TERMTIME             NUMBER(6),
+   REQREFNO             VARCHAR(32),
+   CUSTID               NUMBER(9),
+   CUSTNAME             VARCHAR2(60),
+   STUEMPNO             VARCHAR2(20),
+   TRANSCODE            NUMBER(4)                       NOT NULL,
+   AMOUNT               NUMBER(9)                      DEFAULT 0 NOT NULL,
+   BALANCE              NUMBER(9)                      DEFAULT 0 NOT NULL,
+   HOSTDATE             NUMBER(8),
+   HOSTTIME             NUMBER(6),
+   STATUS               NUMBER(2),
+   ERRCODE              NUMBER(9),
+   REMARK               VARCHAR(60)
+)
+TABLESPACE TS_YKT_HIS;
+
+COMMENT ON COLUMN T_NETDTL.ACCDATE IS
+'记账日期';
+
+COMMENT ON COLUMN T_NETDTL.REFNO IS
+'交易参考号';
+
+COMMENT ON COLUMN T_NETDTL.TERMID IS
+'终端号';
+
+COMMENT ON COLUMN T_NETDTL.TERMSEQNO IS
+'终端流水号';
+
+COMMENT ON COLUMN T_NETDTL.TERMDATE IS
+'交易日期';
+
+COMMENT ON COLUMN T_NETDTL.TERMTIME IS
+'交易时间';
+
+COMMENT ON COLUMN T_NETDTL.REQREFNO IS
+'请求方流水号';
+
+COMMENT ON COLUMN T_NETDTL.CUSTID IS
+'客户号';
+
+COMMENT ON COLUMN T_NETDTL.CUSTNAME IS
+'客户姓名';
+
+COMMENT ON COLUMN T_NETDTL.STUEMPNO IS
+'学工号';
+
+COMMENT ON COLUMN T_NETDTL.TRANSCODE IS
+'交易代码';
+
+COMMENT ON COLUMN T_NETDTL.AMOUNT IS
+'交易金额';
+
+COMMENT ON COLUMN T_NETDTL.BALANCE IS
+'账户余额';
+
+COMMENT ON COLUMN T_NETDTL.HOSTDATE IS
+'主机日期';
+
+COMMENT ON COLUMN T_NETDTL.HOSTTIME IS
+'主机时间';
+
+COMMENT ON COLUMN T_NETDTL.STATUS IS
+'交易状态';
+
+COMMENT ON COLUMN T_NETDTL.ERRCODE IS
+'错误代码';
+
+COMMENT ON COLUMN T_NETDTL.REMARK IS
+'备注';
+
+ALTER TABLE T_NETDTL
+   ADD CONSTRAINT PK_T_NETDTL PRIMARY KEY (REFNO);
+
+/*==============================================================*/
+/* Index: UNIQ_NETDTL_REQSEQNO                                  */
+/*==============================================================*/
+CREATE UNIQUE INDEX UNIQ_NETDTL_REQSEQNO ON T_NETDTL (
+   REQREFNO ASC
+);
+
+/*==============================================================*/
+/* Index: IDX_NETDTL_CUSTID                                     */
+/*==============================================================*/
+CREATE INDEX IDX_NETDTL_CUSTID ON T_NETDTL (
+   CUSTID ASC
+);

@@ -1,0 +1,332 @@
+/* --------------------------------------------
+ * 创建日期: 2012/01/11
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:  自动采集当天丢失流水
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <string.h>
+#include "pubdef.h"
+#include "errdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include <iostream>
+#include <sstream>
+#include "ConfigFile.h"
+#include "logger_imp.h"
+#include "ecarddbcfg.h"
+using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+
+int collect_serial(char *begindate)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        int   hi_seri_begin = 0;
+        int   hi_seri_end = 0;
+        int   ho_cnt = 0;
+        short   indr = 0;
+        char       ho_posphyid[31] = {0};
+        char       h_sqlcmd[1024] = "";
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    int row = 0;
+    int seri_end = 0;
+    int deviceid = 0;
+    char  devid[31] = "";
+    T_t_device tDevice;
+    char recvtime[15] = {0};
+    memcpy(recvtime, begindate, 8);
+    memset(recvtime + 8, '0', 6);
+    LOG(DEBUG, "采集设备丢失的流水");
+
+    stringstream sql;
+
+    sql << "select s,e,e-s+1 cnt,posphyid from ( select  ";
+    sql << "	sum(posseqno) over (PARTITION BY posphyid order by posseqno rows between 1 preceding and 0 following )- posseqno+1 as S,";
+    sql << "	posseqno-1 as E, posphyid  from t_posdata ";
+    sql << "	where  posseqno>0 and transdate>=" << begindate << " and recvtime>='" << recvtime << "'";
+    sql << " ) t	where E-S+1>0 and s>1 order by posphyid";
+    strcpy(h_sqlcmd, sql.str().c_str());
+    //  LOG(DEBUG,"sql[%s]",h_sqlcmd);
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__, __LINE__, &sqlca);
+        return E_DB_CURSOR_DECLARE;
+    }
+
+    EXEC SQL DECLARE col_seri_cur CURSOR FOR query_stmt;
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__, __LINE__, &sqlca);
+        return E_DB_CURSOR_DECLARE;
+    }
+
+    EXEC SQL OPEN col_seri_cur;
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__, __LINE__, &sqlca);
+        return E_DB_CURSOR_OPEN;
+    }
+
+    while(1)
+    {
+        hi_seri_begin = 0;
+        hi_seri_end = 0;
+        ho_cnt = 0;
+        ho_posphyid[0] = 0;
+        EXEC SQL FETCH col_seri_cur INTO
+        :hi_seri_begin:indr,
+        :hi_seri_end:indr,
+        :ho_cnt:indr,
+        :ho_posphyid:indr;
+        if(SQLCODE)
+        {
+            ret = SQLCODE;
+            db_chk_err(__FILE__, __LINE__, &sqlca);
+            EXEC SQL CLOSE col_seri_cur;
+            if(DB_NOTFOUND == ret)
+                break;
+            else
+                return E_DB_CURSOR_FETCH;
+        }
+        if(ho_cnt > 500)  //超过500条，设备有问题或流水号已经重新开始
+        {
+            LOG(ERROR, "补采设备" << ho_posphyid << "流水,该设备缺失超过500条，设备可能有问题或流水号已经重新开始");
+            continue;
+        }
+        trim(ho_posphyid);
+        if(strcmp(devid, ho_posphyid))
+        {
+            deviceid = 0;
+            memset(&tDevice, 0, sizeof(tDevice));
+            ret = GetDevIdByDevPhyId(&deviceid, ho_posphyid);
+            if(ret)
+                continue;
+            ret = DB_t_device_read_by_deviceid(deviceid, &tDevice);
+            if(ret)
+            {
+                LOG(ERROR, "DB_t_device_read_by_deviceid");
+                continue;
+            }
+            strcpy(devid, ho_posphyid);
+        }
+        if('2' == tDevice.status[0])
+            continue;
+
+        T_t_devmsg tDevMsg;
+        memset(&tDevMsg, 0, sizeof(tDevMsg));
+        tDevMsg.deviceid = tDevice.deviceid;
+        strcpy(tDevMsg.devphyid, tDevice.devphyid);
+        tDevMsg.msgtype = 930016;
+        tDevMsg.msglevel = 1;
+        tDevMsg.sysid = tDevice.sysid;     //子系统号
+        LOG(INFO, "collect deviceid:" << tDevice.deviceid << ",devphyid:" << tDevice.devphyid << ",devicename:" << tDevice.devicename << ",count:" << (hi_seri_end - hi_seri_begin + 1) << ",startno:" << hi_seri_begin << ",endno:" << hi_seri_end);
+        // 每次补采不多于1条
+        do
+        {
+            //seri_end = (hi_seri_begin + 4) >= hi_seri_end ? hi_seri_end : hi_seri_begin + 4;
+            sprintf(tDevMsg.msgdata, "{\"start\":%d,\"end\":%d}", hi_seri_begin, hi_seri_begin);
+            ret = getNewUniqNo(KEYTYPE_DEVMSGID, &tDevMsg.msgid);
+            if(ret)
+                return ret;
+            db_getsysdatetime2(tDevMsg.crttime);
+            ret = DB_t_devmsg_add(&tDevMsg);
+            if(ret)
+            {
+                LOG(ERROR, "AddDevMsg error ret=" << ret);
+                return ret;
+            }
+            hi_seri_begin ++;
+        }
+        while(hi_seri_begin <= hi_seri_end);
+        row += ho_cnt;
+    }
+    LOG(DEBUG, "collect posdata rows:" << row);
+    return 0;
+}
+static bool init_config(string pathname, string& connectinfo, string& logconf)
+{
+    try
+    {
+        ConfigFile config(pathname);
+        try
+        {
+            config.readInto(connectinfo, "connectinfo");
+            config.readInto(logconf, "logconf");
+        }
+        catch(ConfigFile::key_not_found& ex)
+        {
+            cout << "read " << ex.key << " faild" << endl;
+            return false;
+        }
+        return true;
+    }
+    catch(ConfigFile::file_not_found& ex)
+    {
+        cout << "read file " << ex.filename << " faild " << endl;
+        return false;
+    }
+}
+
+int main(int argc, char *argv[])
+{
+    int ret = 0;
+    char *p = NULL;
+    char begindate[11] = "";
+    char enddate[11] = "";
+
+    char  szVerNo[61] = {0};
+    sprintf(szVerNo, "%s.%s %s (%s %s)", argv[0], APP_USER, YKT_VERSION, __DATE__, __TIME__);
+    if(argc >= 2)
+    {
+        if(strncmp(argv[1], "-v", 2) == 0 || strncmp(argv[1], "-V", 2) == 0)
+        {
+            printf("%s\n", szVerNo);
+            return 0;
+        }
+        else
+        {
+            printf("colposdatasvr: invalid option  %s\n", argv[1]);
+            return 0;
+        }
+    }
+    string conf = argv[0];
+    conf = conf + ".conf";
+
+    string connectinfo;
+    string logconf;
+    if(!init_config(conf, connectinfo, logconf))
+    {
+        cout << "init_config failed!";
+        return -1;
+    }
+    if(!init_logger(logconf))
+    {
+        cout << "server init log faild" << endl;
+        return -2;
+    }
+    LOG(DEBUG, "init ok");
+    char errmsg[512] = {0};
+    char szConnectInfo[256];
+    bool r = edb_get_db_url(NULL, "ecard", szConnectInfo, errmsg);
+    if(!r)
+    {
+        LOG(ERROR, "读取数据库连接参数失败" << errmsg);
+        if(connectinfo.size() < 1)
+            return -3;
+        LOG(INFO, "使用本地配置文件" << conf << "中的数据库连接连接");
+        ret = ConnectDb(connectinfo.c_str());
+    }
+    else
+    {
+        connectinfo = szConnectInfo;
+        ret = ConnectDb(connectinfo.c_str());
+    }
+    if(ret)
+    {
+        LOG(ERROR, "连接数据库失败，系统启动失败");
+        return ret;
+    }
+    LOG(DEBUG, "connect database ok");
+    char  lasttransdate[9] = {0};
+    char  begindate1[9] = {0};
+    //char  begindate2[9] = {0};
+    const long check_interval = 3000;//50分钟
+
+    time_t last_check = -check_interval;
+    time_t now = 0;
+    //bool execflag = false;
+    char szhour[3] = {0};
+    int nhour = 0;
+    while(1)
+    {
+        if(!IsDatabaseConnect())
+        {
+            LOG(DEBUG, "connect database ...");
+            ret = ConnectDb(connectinfo.c_str());
+            if(ret)
+            {
+                db_chk_err(__FILE__, __LINE__, &sqlca);
+                LOG(ERROR, "connect to database error ret=" << ret);
+                sleep(30);
+                continue;
+            }
+        }
+        char transdate[9] = {0};
+        char transtime[7] = {0};
+        ret = db_getsysdatetime(transdate, transtime);
+        if(ret)
+        {
+            LOG(ERROR, "db_getsysdatetime ret=" << ret);
+            goto L_RET;
+        }
+        memcpy(szhour, transtime, 2);
+        nhour = atol(szhour);
+        switch(nhour)
+        {
+            case 5:
+            case 10:
+            case 15:
+                break;
+            case 23:
+                DynamicStmtExecute("update t_devmsg set closed=1,respcode=-1,respmsg='取消' where closed=0 and msgtype=930016");
+                db_commit();
+                sleep(60);
+                continue;
+            default:
+                //DynamicStmtExecute("delete from t_devmsg where msgtype=930016 and crttime<to_char(sysdate-365,'YYYYMMDDHH24MISS')");
+                //db_commit();
+                sleep(60);
+                continue;
+        }
+        if(strncmp(transdate, lasttransdate, 8) != 0)
+        {
+            ret = calcEndDate(transdate, -30, begindate1);
+            if(ret)
+            {
+                LOG(ERROR, "calcEndDate ret=" << ret);
+                return ret;
+            }
+            strcpy(lasttransdate, transdate);
+        }
+        now = time(0);
+        if(now - last_check >= check_interval)
+        {
+            last_check = now;
+            ret = DynamicStmtExecute("delete from t_devmsg where closed=0 and msgtype=930016 and crttime<to_char(sysdate-0.01,'YYYYMMDDHH24MISS')");
+            if(ret)
+            {
+                if(ret != DB_NOTFOUND)
+                {
+                    db_rollback();
+                    LOG(ERROR, "delete from t_devmsg ret=" << ret);
+                    goto L_RET;
+                }
+            }
+            db_commit();
+            //采集一个月的流水
+            LOG(INFO, "采集流水:开始日期" << begindate1);
+            ret = collect_serial(begindate1);
+            if(ret)
+            {
+                db_rollback();
+                LOG(ERROR, "collect_serial ret=" << ret);
+                goto L_RET;
+            }
+            db_commit();
+        }
+        else
+        {
+            sleep(60);
+        }
+    }
+L_RET:
+    db_disconnect();
+    return 0;
+}

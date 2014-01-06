@@ -1,0 +1,1431 @@
+/* --------------------------------------------
+ * 程序名称: F930031.sqc
+ * 创建日期: 9 17 2004
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能:  收集消费流水入账该程序只适用于单进程
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include "pubdef.h"
+#include "errdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include "interfacefunc.h"
+#include "transfunc.h"
+#include <vector>
+#include "ConfigFile.h"
+#include "logger_imp.h"
+#include "ecarddbcfg.h"
+
+
+EXEC SQL INCLUDE SQLCA;
+
+typedef vector<T_t_posdata> POSDATAVECT;
+typedef struct
+{
+    char accno[11];
+    double balance;
+} ST_ACCTBAL;
+typedef vector<ST_ACCTBAL>  ACCTVECT;
+static double maxshopfeerate = 0.9;
+static double gWaterMaxAmt = 0;
+
+typedef vector<T_t_cardlostdtl> CARDLOSTDATAVECT;
+
+static int UpdPosDataExceptStatus()
+{
+    SQLCODE = 0;
+    EXEC SQL
+        update t_posdata set status=1
+        where status=2;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        int ret = SQLCODE;
+        db_rollback();
+        return ret;
+    }
+    return db_commit();
+}
+
+//读取补记流水到数组中
+static int GetCardLostDataVect(CARDLOSTDATAVECT& LostDataVect)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        int cardno = 0; //卡号
+        int dpscnt = 0; //卡充值次数
+        int paycnt = 0; //消费次数
+        int cardbefbal = 0; //交易前卡余额
+        int amount = 0; //交易金额
+        int cardaftbal = 0; //交易后卡余额
+        int transflag = 0; //1充值2消费
+        int transdate = 0; //交易日期
+        int datatype = 0; //0-可疑1-丢失2中途拔卡9其他
+        int createdate = 0; //创建日期
+        short indicator = 0;
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    T_t_cardlostdtl  cardlostdtl;
+    if(LostDataVect.size())
+        LostDataVect.clear();
+
+    EXEC SQL DECLARE cardlostdtl_cur CURSOR FOR
+        SELECT
+          cardno,
+          dpscnt,
+          paycnt,
+          cardbefbal,
+          amount,
+          cardaftbal,
+          transflag,
+          transdate,
+          datatype,
+          createdate
+        FROM t_cardlostdtl
+        where chkflag = 1 and handled=0
+        order by cardno,dpscnt,paycnt,cardbefbal;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN cardlostdtl_cur;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1)
+    {
+        cardno = 0;
+        dpscnt = 0;
+        paycnt = 0;
+        cardbefbal = 0;
+        amount = 0;
+        cardaftbal = 0;
+        transflag = 0;
+        transdate = 0;
+        datatype = 0;
+        createdate = 0;
+        EXEC SQL FETCH cardlostdtl_cur INTO
+        :cardno:indicator,
+        :dpscnt:indicator,
+        :paycnt:indicator,
+        :cardbefbal:indicator,
+        :amount:indicator,
+        :cardaftbal:indicator,
+        :transflag:indicator,
+        :transdate:indicator,
+        :datatype:indicator,
+        :createdate:indicator;
+        if(SQLCODE)
+        {
+            ret = SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE cardlostdtl_cur;
+            if(DB_NOTFOUND == ret)
+            {
+                break;
+            }
+            else
+                return E_DB_ERROR;
+        }
+        memset(&cardlostdtl, 0, sizeof(cardlostdtl));
+        cardlostdtl.cardno = cardno;
+        cardlostdtl.dpscnt = dpscnt;
+        cardlostdtl.paycnt = paycnt;
+        cardlostdtl.cardbefbal = cardbefbal;
+        cardlostdtl.amount = amount;
+        cardlostdtl.cardaftbal = cardaftbal;
+        cardlostdtl.transflag = transflag;
+        cardlostdtl.transdate = transdate;
+        cardlostdtl.datatype = datatype;
+        cardlostdtl.createdate = createdate;
+        LostDataVect.push_back(cardlostdtl);
+        if(LostDataVect.size() >= 5000)
+        {
+            EXEC SQL CLOSE cardlostdtl_cur;
+            break;
+        }
+    }
+    return 0;
+}
+
+
+//读取流水到数组中
+static int GetPosDataVect(POSDATAVECT& PosDataVect, int v_status)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        int id = 0; //ID
+        int senderid = 0; //发送方ID
+        char sendercode[11] = {0}; //POS厂商类别
+        char posphyid[21] = {0}; //设备物理ID
+        int posseqno = 0; //设备流水号
+        char merchno[16] = {0}; //商户卡号
+        char termno[13] = {0}; //SAM卡终端编号
+        int transdate = 0; //交易日期
+        int transtime = 0; //交易时间
+        int cardno = 0; //交易卡号
+        int paycnt = 0; //卡交易次数
+        int cardbefbal = 0; //交易前卡余额
+        int cardaftbal = 0; //交易后卡余额
+        int reversed = 0; //冲正标志
+        int payamt = 0; //发生额-包含管理费
+        int feeamt = 0; //管理费
+        int amount = 0; //实际金额
+        int datatype = 0; //交易标记
+        int sendtype = 0; //数据上送类型
+        int withpasswd = 0; //是否通过密码消费
+        int updresult = 0; //写卡结果
+        char tac[9] = {0}; //TAC码
+        char mac[9] = {0}; //MAC
+        char recvtime[15] = {0}; //采集时间
+        char refno[21] = {0}; //参考号
+        int igntime = 0; //是否忽略消费时间
+        int igncnt = 0; //是否忽略消费次数
+        int status = 0; //状态-1初始状态2-入账失败3-成功4-异常流水
+        int errcode = 0; //错误码
+        char remark[241] = {0}; //备注
+        short indicator = 0;
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    status = v_status;
+    T_t_posdata  posdata;
+
+    if(PosDataVect.size())
+        PosDataVect.clear();
+    SQLCODE = 0;
+    EXEC SQL DECLARE posdata_cur CURSOR FOR
+    SELECT /*+ FIRST_ROWS */
+       id,
+       senderid,
+       sendercode,
+       posphyid,
+       posseqno,
+       merchno,
+       termno,
+       transdate,
+       transtime,
+       cardno,
+       paycnt,
+       cardbefbal,
+       cardaftbal,
+       reversed,
+       payamt,
+       feeamt,
+       amount,
+       datatype,
+       sendtype,
+       withpasswd,
+       updresult,
+       tac,
+       mac,
+       recvtime,
+       refno,
+       igntime,
+       igncnt,
+       status,
+       errcode,
+       remark
+    FROM t_posdata
+    where  status=:status order by cardno,paycnt;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN posdata_cur;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1)
+    {
+        id = 0;
+        senderid = 0;
+        sendercode[0] = 0;
+        posphyid[0] = 0;
+        posseqno = 0;
+        merchno[0] = 0;
+        termno[0] = 0;
+        transdate = 0;
+        transtime = 0;
+        cardno = 0;
+        paycnt = 0;
+        cardbefbal = 0;
+        cardaftbal = 0;
+        reversed = 0;
+        payamt = 0;
+        feeamt = 0;
+        amount = 0;
+        datatype = 0;
+        sendtype = 0;
+        withpasswd = 0;
+        updresult = 0;
+        tac[0] = 0;
+        mac[0] = 0;
+        recvtime[0] = 0;
+        refno[0] = 0;
+        igntime = 0;
+        igncnt = 0;
+        status = 0;
+        errcode = 0;
+        remark[0] = 0;
+        EXEC SQL FETCH posdata_cur INTO
+         :id:indicator,
+         :senderid:indicator,
+         :sendercode:indicator,
+         :posphyid:indicator,
+         :posseqno:indicator,
+         :merchno:indicator,
+         :termno:indicator,
+         :transdate:indicator,
+         :transtime:indicator,
+         :cardno:indicator,
+         :paycnt:indicator,
+         :cardbefbal:indicator,
+         :cardaftbal:indicator,
+         :reversed:indicator,
+         :payamt:indicator,
+         :feeamt:indicator,
+         :amount:indicator,
+         :datatype:indicator,
+         :sendtype:indicator,
+         :withpasswd:indicator,
+         :updresult:indicator,
+         :tac:indicator,
+         :mac:indicator,
+         :recvtime:indicator,
+         :refno:indicator,
+         :igntime:indicator,
+         :igncnt:indicator,
+         :status:indicator,
+         :errcode:indicator,
+         :remark:indicator;
+        if(SQLCODE)
+        {
+            ret = SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE posdata_cur;
+            if(DB_NOTFOUND == ret)
+            {
+                break;
+            }
+            else
+                return E_DB_POSDTL_R;
+        }
+        memset(&posdata, 0, sizeof(posdata));
+        posdata.id = id;
+        posdata.senderid = senderid;
+        des2src(posdata.sendercode, sendercode);
+        des2src(posdata.posphyid, posphyid);
+        posdata.posseqno = posseqno;
+        des2src(posdata.merchno, merchno);
+        des2src(posdata.termno, termno);
+        posdata.transdate = transdate;
+        posdata.transtime = transtime;
+        posdata.cardno = cardno;
+        posdata.paycnt = paycnt;
+        posdata.cardbefbal = cardbefbal;
+        posdata.cardaftbal = cardaftbal;
+        posdata.reversed = reversed;
+        posdata.payamt = payamt;
+        posdata.feeamt = feeamt;
+        posdata.amount = amount;
+        posdata.datatype = datatype;
+        posdata.sendtype = sendtype;
+        posdata.withpasswd = withpasswd;
+        posdata.updresult = updresult;
+        des2src(posdata.tac, tac);
+        des2src(posdata.mac, mac);
+        des2src(posdata.recvtime, recvtime);
+        des2src(posdata.refno, refno);
+        posdata.igntime = igntime;
+        posdata.igncnt = igncnt;
+        posdata.status = status;
+        posdata.errcode = errcode;
+        des2src(posdata.remark, remark);
+        PosDataVect.push_back(posdata);
+        if(PosDataVect.size() >= 1000)
+        {
+            EXEC SQL CLOSE posdata_cur;
+            break;
+        }
+    }
+    return 0;
+}
+static int GetClosedAccountVect(ACCTVECT& acctVect)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        char accno[11] = {0};
+        double balance = 0;
+        short ho_idr = 0;
+    EXEC SQL END DECLARE SECTION;
+    int ret = 0;
+    ST_ACCTBAL  acctbal;
+
+    if(acctVect.size())
+        acctVect.clear();
+
+    EXEC SQL DECLARE acctbal_cur CURSOR FOR
+     SELECT /*+ FIRST_ROWS */ accno,balance
+     FROM t_account
+     where  status=2 and balance<>0 and balance>=-250 and closedate<=to_char(sysdate-60,'YYYYMMDD') order by closedate;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN acctbal_cur;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1)
+    {
+        accno[0] = 0;
+        balance = 0;
+        EXEC SQL FETCH acctbal_cur INTO
+        accno:ho_idr,
+        balance:ho_idr;
+        if(SQLCODE)
+        {
+            ret = SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE acctbal_cur;
+            if(DB_NOTFOUND == ret)
+            {
+                break;
+            }
+            else
+                return E_DB_ACCOUNT_R;
+        }
+        memset(&acctbal, 0, sizeof(acctbal));
+        des2src(acctbal.accno, accno);
+        acctbal.balance = balance;
+        acctVect.push_back(acctbal);
+        if(acctVect.size() >= 10000)
+        {
+            EXEC SQL CLOSE acctbal_cur;
+            break;
+        }
+    }
+    return 0;
+}
+int ProcessClosedAccount(ST_ACCTBAL& acctbal)
+{
+    int ret = 0;
+    CAccTrans& ats = CAccTrans::GetInst();
+    TRANS& trans = ats.trans;
+    ret = ats.Reset();
+    if(ret)
+        return ret;
+    ats.trans.termid = TERMID_SVR;
+    ats.trans.transcode = TC_CARDACCDIFF;
+    ret = ats.GetTermSeqno();
+    if(ret)
+        return ret;
+
+    des2src(trans.cardaccno, acctbal.accno);
+    if(amtcmp(acctbal.balance, 0) > 0)
+    {
+        des2src(trans.draccno, acctbal.accno);
+        des2src(trans.craccno, SUBJECT_INCOME);
+        ats.trans.transtype = TRANSTYPE_MORE_CARDBALINCOME;
+        ats.SetInputAmt(acctbal.balance);
+    }
+    else
+    {
+        des2src(trans.draccno, SUBJECT_OUT);
+        des2src(trans.craccno, acctbal.accno);
+        ats.trans.transtype = TRANSTYPE_LESS_CARDBAL;
+        ats.SetInputAmt(-acctbal.balance);
+    }
+    ats.trans.offlineflag = 1;
+    ats.trans.transamt = ats.trans.inputamt;
+    ats.trans.fundtype = 0;
+    ret = ats.DoTransByTransType();
+    if(ret)
+        return ret;
+    ret = ats.doTransEnd();
+    if(ret)
+        return ret;
+    LOG(INFO, "process accno[" << acctbal.accno << "]balance[" << acctbal.balance << "] OK");
+    return 0;
+}
+static int UpdPosDataStatusByID(int id, int errcode, int status)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        int     hi_id = 0;     //终端ID
+        int     hi_status = 0;  //流水状态
+        int     hi_errcode = 0;
+        char     hi_refno[21] = {0};   //记账日期
+        char     hi_errmsg[241] = {0}; //错误信息
+    EXEC SQL END DECLARE SECTION;
+
+    CAccTrans& ats = CAccTrans::GetInst();
+    hi_id = id;
+    hi_errcode = errcode;
+    hi_status = status;
+    des2src(hi_refno, ats.trans.refno);
+    des2src(hi_errmsg, ats.GetErrMsg(errcode).c_str());
+    EXEC SQL
+    update t_posdata
+    set status=:hi_status,errcode=:hi_errcode,
+    refno=:hi_refno,remark=:hi_errmsg
+    where id=:hi_id and status <>3;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        LOG(ERROR, "update t_posdtl id=" << id);
+        if(DB_REPEAT == SQLCODE)
+            return E_DB_POSDTL_E;
+        else
+            return E_DB_POSDTL_U;
+    }
+    return 0;
+}
+static int SaveLockCardPosData(T_t_posdata& posdata)
+{
+    int ret = 0;
+    CAccTrans& ats = CAccTrans::GetInst();
+    TRANS& trans = ats.trans;
+
+    trans.transcode = TC_POSLOCKCARD;
+    trans.cardno = posdata.cardno;
+    ret = ats.GetTermSeqno();
+    if(ret)
+    {
+        return ret;
+    }
+    ret = GetCardAccInfoByCardNo(posdata.cardno, &trans.custid, NULL, trans.showcardno);
+    if(ret)
+    {
+        LOG(ERROR, "GetCardAccInfoByCardNo ret[" << ret << "]cardno[" << posdata.cardno << "]");
+        return ret;
+    }
+
+    T_t_transdtl transdtl;
+
+    memset(&transdtl, 0, sizeof(transdtl));
+    ret = ats.GetNewRefno(trans.refno);
+    if(ret)
+        return ret;
+    des2src(transdtl.refno, trans.refno);
+    sprintf(transdtl.transdate, trans.transdate);
+    sprintf(transdtl.transtime, trans.transtime);
+    des2src(transdtl.accdate, trans.accdate);
+    des2src(transdtl.acctime, trans.acctime);
+    des2src(transdtl.coldate, string(posdata.recvtime, 8).c_str());
+    des2src(transdtl.coltime, string(posdata.recvtime + 8, 6).c_str());
+    transdtl.termid = trans.termid;
+    transdtl.termseqno = trans.termseqno;
+    transdtl.transcode = trans.transcode;
+    transdtl.cardno = posdata.cardno;
+    transdtl.cardcnt = posdata.paycnt;
+    transdtl.cardbefbal = D4U5(posdata.cardbefbal / 100.0);
+    transdtl.cardaftbal = D4U5(posdata.cardaftbal / 100.0);
+    transdtl.amount = 0;
+    transdtl.managefee = 0;
+    transdtl.sysid = posdata.senderid;
+    des2src(transdtl.devphyid, posdata.posphyid);
+    transdtl.devseqno = posdata.posseqno;
+    transdtl.offlineflag = posdata.sendtype;
+    transdtl.transflag = TF_PAY;
+    transdtl.status = TRANSTATUS_EXCEPT;
+    transdtl.errcode = 0;
+    des2src(transdtl.showcardno, trans.showcardno);
+    transdtl.custid = trans.custid;
+    GetCustBaseInfoByCustID(trans.custid, transdtl.custname, transdtl.stuempno, NULL);
+    ret = DB_t_transdtl_add(&transdtl);
+    if(ret)
+    {
+        if(DB_REPEAT == ret)
+            return E_DB_TRANSDTL_E;
+        else
+            return E_DB_TRANSDTL_I;
+    }
+    return 0;
+}
+//保存中途拔卡消费失败流水
+int SaveUpdCardFailPosData(T_t_posdata& posdata)
+{
+    int ret = 0;
+    CAccTrans& ats = CAccTrans::GetInst();
+    TRANS& trans = ats.trans;
+
+    trans.transcode = TC_CONSUMEFAIL;
+    trans.cardno = posdata.cardno;
+    ret = ats.GetTermSeqno();
+    if(ret)
+    {
+        return ret;
+    }
+    ret = GetCardAccInfoByCardNo(posdata.cardno, &trans.custid, NULL, trans.showcardno);
+    if(ret)
+    {
+        LOG(ERROR, "GetCardAccInfoByCardNo ret[" << ret << "]cardno[" << posdata.cardno << "]");
+        return ret;
+    }
+    T_t_transdtl transdtl;
+    memset(&transdtl, 0, sizeof(transdtl));
+    ret = ats.GetNewRefno(trans.refno);
+    if(ret)
+        return ret;
+    des2src(transdtl.refno, trans.refno);
+    sprintf(transdtl.transdate, trans.transdate);
+    sprintf(transdtl.transtime, trans.transtime);
+    des2src(transdtl.accdate, trans.accdate);
+    des2src(transdtl.acctime, trans.acctime);
+    des2src(transdtl.coldate, string(posdata.recvtime, 8).c_str());
+    des2src(transdtl.coltime, string(posdata.recvtime + 8, 6).c_str());
+    transdtl.termid = trans.termid;
+    transdtl.termseqno = trans.termseqno;
+    transdtl.transcode = trans.transcode;
+    transdtl.cardno = posdata.cardno;
+    transdtl.cardcnt = posdata.paycnt + 1;
+    transdtl.cardbefbal = D4U5(posdata.cardbefbal / 100.0);
+    transdtl.cardaftbal = D4U5(posdata.cardaftbal / 100.0);
+    transdtl.amount = D4U5(posdata.amount / 100.0);
+    transdtl.managefee = D4U5(posdata.feeamt / 100.0);
+    transdtl.sysid = posdata.senderid;
+    des2src(transdtl.devphyid, posdata.posphyid);
+    transdtl.devseqno = posdata.posseqno;
+    transdtl.offlineflag = posdata.sendtype;
+    transdtl.transflag = TF_PAY;
+    transdtl.status = TRANSTATUS_EXCEPT;
+    transdtl.errcode = 0;
+    des2src(transdtl.showcardno, trans.showcardno);
+    transdtl.custid = trans.custid;
+    GetCustBaseInfoByCustID(trans.custid, transdtl.custname, transdtl.stuempno, NULL);
+    ret = DB_t_transdtl_add(&transdtl);
+    if(ret)
+    {
+        if(DB_REPEAT == ret)
+            return E_DB_TRANSDTL_E;
+        else
+            return E_DB_TRANSDTL_I;
+    }
+    return 0;
+}
+
+int PosDataProcess(T_t_posdata& posdata)
+{
+    int ret = 0;
+    CAccTrans& ats = CAccTrans::GetInst();
+    TRANS& trans = ats.trans;
+    if(posdata.igntime != 1)
+    {
+        char szExpireDate[9] = {0};
+        calcEndDate(ats.trans.accdate, -POSDATA_EXPIRE_MAXDAY, szExpireDate);
+        if(posdata.transdate < atoi(szExpireDate))
+        {
+            return E_POSDTL_EXPIRED;
+        }
+    }
+    if(posdata.igncnt != 1)
+    {
+        //判断卡交易位图表该交易是否已经处理过
+        ret = CheckCardCntExist(posdata.cardno, posdata.paycnt + 1, trans.transdate);
+        if(ret)
+        {
+            if(ERRIF_CARDCNT_REPEAT == ret)
+            {
+                posdata.status = 6;
+                return ret;
+                //如果没有
+            }
+            else
+            {
+                posdata.status = 4;
+                return ret;
+            }
+        }
+        //更新交易位图
+        ret = UpdateCardBitmap(posdata.cardno, posdata.paycnt + 1, CARDBITMAPTYPE_POS_OFFLINE);
+        if(ret)
+        {
+            if(ERRIF_CARDCNT_REPEAT == ret)
+            {
+                posdata.status = 6;
+                return ret;
+                //如果没有
+            }
+            else if(E_CARDCNT_TOO_SMALL == ret)
+            {
+                posdata.status = 6;
+                return ret;
+            }
+            else
+            {
+                posdata.status = 4;
+                return ret;
+            }
+        }
+    }
+    T_t_card  tCard;
+    memset(&tCard, 0, sizeof(tCard));
+    ret = DB_t_card_read_by_cardno(posdata.cardno, &tCard);
+    if(ret)
+    {
+        if(DB_NOTFOUND == ret)
+            return E_NOTEXIST_CARDNO;
+        else
+            return E_DB_CARD_R;
+    }
+    /*
+    if((STATUS_DELETE != tCard.status[0]) && ('1' == tCard.lossflag[0]))
+    {
+        //不是坏卡登记的挂失
+        if(tCard.badflag[0] != '1')
+        {
+            char trandatetime[15] = {0};
+            memcpy(trandatetime, posdata.transdate, 8);
+            memcpy(trandatetime + 8, posdata.transtime, 6);
+            if(strncmp(trandatetime, tCard.lossefttime, 14) > 0)
+            {
+                LOG(ERROR, "cardno[" << posdata.cardno << " lost ,effect time=" << tCard.lossefttime << ",pos transtime=" << trandatetime);
+                return E_CARD_LOST;
+            }
+        }
+    }
+    */
+    T_t_account tAccount;
+    memset(&tAccount, 0, sizeof(tAccount));
+    ret = CardAccInfoReadbyAccno(tCard.accno, &tAccount);
+    if(ret)
+    {
+        return ret;
+    }
+    trans.usecardflag = 1;
+    trans.custid = tCard.custid;
+    trans.feetype = tCard.feetype;
+    trans.cardno = posdata.cardno;
+    trans.paycnt = posdata.paycnt;
+    trans.aftpaycnt = posdata.paycnt + 1;
+    trans.transflag = TF_PAY;
+    trans.cardbefbal = posdata.cardbefbal;
+    trans.cardaftbal = posdata.cardaftbal;
+    trans.usecardflag = 1;
+    trans.cardflag = 1;
+    trans.offlineflag = 1;
+    trans.cardtype = tCard.cardphytype;
+    trans.cardphytype = tCard.cardphytype;
+    des2src(trans.cardaccno, tCard.accno);
+    trans.transcode = TC_POSDRAW;
+    //根据pos的设备物理ID、交易日期、交易时间、
+    //查询该设备对应的商户
+    ret = GetShopidByDevphyid(posdata.posphyid, trans.transdate, trans.transtime, trans.termid, trans.shopid);
+    if(ret)
+    {
+        return ret;
+    }
+    int shoptype = 0;
+    char shopstatus[2] = {0};
+    char boardfeeflag[2] = {0};
+    ret = ShopAccReadbyShopid(trans.shopid, trans.shopaccno, &shoptype, shopstatus, boardfeeflag);
+    if(ret)
+    {
+        LOG(ERROR, "shopid=" << trans.shopid);
+        return ret;
+    }
+    if(shoptype != SHOPTYPE_COSUMESHOP)
+        return ERRIF_SHOP_TYPE;
+    if(shopstatus[0] != STATUS_NORMAL)
+    {
+        posdata.status = 4;
+        return ERRIF_SHOP_CLOSE;
+    }
+    des2src(trans.draccno, trans.cardaccno);
+    des2src(trans.craccno, trans.shopaccno);
+    ret = ats.GetTermSeqno();
+    if(ret)
+    {
+        return ret;
+    }
+    ret = ats.GetNewRefno(trans.refno);
+    if(ret)
+        return ret;
+    if(posdata.reversed)
+        trans.revflag = 1;
+    switch(posdata.datatype)
+    {
+        case 10:
+        case 30:
+            //正常记录
+            trans.transtype = TRANSTYPE_POSPAYMENT;
+            trans.transamt = D4U5(posdata.amount / 100.0);
+            if(posdata.reversed)
+                trans.transamt = -trans.transamt;
+            trans.inputamt = trans.transamt;
+            trans.unusedamt = trans.inputamt;
+            ret = ats.DoTransByTransType();
+            if(ret)
+                return ret;
+            if(ats.trans.unusedamt > 0)
+                return E_INPUT_AMT;
+            if(ats.trans.unusedamt < 0)
+                return E_AMT_LACK;
+            break;
+        case 20:
+            trans.transtype = TRANSTYPE_POSPAYMENT;
+            trans.transamt = D4U5(posdata.payamt / 100.0);
+            if(posdata.reversed)
+                trans.transamt = -trans.transamt;
+            trans.inputamt = trans.transamt;
+            trans.unusedamt = trans.inputamt;
+            ret = ats.DoTransByTransType();
+            if(ret)
+                return ret;
+            if(ats.trans.unusedamt > 0)
+                return E_INPUT_AMT;
+            if(ats.trans.unusedamt < 0)
+                return E_AMT_LACK;
+            if(0 == posdata.feeamt)
+                break;
+            if(1 == ats.sysPara.iShopBoardFeeFlag)
+            {
+                trans.transtype = TRANSTYPE_SHOPBOARDFEE;
+                trans.transamt = D4U5(posdata.feeamt / 100.0);
+                if(posdata.reversed)
+                    trans.transamt = -trans.transamt;
+                trans.inputamt = trans.transamt;
+                trans.unusedamt = trans.inputamt;
+                ret = ats.DoTransByTransType();
+                if(ret)
+                    return ret;
+                if(amtcmp(ats.trans.unusedamt, 0) > 0)
+                    return E_INPUT_AMT;
+                if(amtcmp(ats.trans.unusedamt, 0) < 0)
+                    return E_AMT_LACK;
+            }
+            /*
+                    else if((2 == ats.sysPara.iShopBoardFeeFlag) && ('1' == boardfeeflag[0]))
+                    {
+                        trans.transtype = TRANSTYPE_SHOPBOARDFEE2;
+                        int iBoardfee = 0;
+                        ret = CalcPrestoreFee(trans.feetype, posdata.amount, &iBoardfee);
+                        if(ret)
+                            return ret;
+                        trans.transamt =  D4U5(iBoardfee / 100.0);;
+                        if(posdata.reversed)
+                            trans.transamt=-trans.transamt;
+                        trans.inputamt = trans.transamt;
+                        trans.unusedamt = trans.inputamt;
+                        ret = ats.DoTransByTransType();
+                        if(ret)
+                            return ret;
+                        if(amtcmp(ats.trans.unusedamt, 0) > 0)
+                            return E_INPUT_AMT;
+                        if(amtcmp(ats.trans.unusedamt, 0) < 0)
+                            return E_AMT_LACK;
+                    }
+                    */
+            else
+            {
+                trans.transtype = TRANSTYPE_BOARDFEE;
+                trans.transamt = D4U5(posdata.feeamt / 100.0);
+                if(posdata.reversed)
+                    trans.transamt = -trans.transamt;
+                trans.inputamt = trans.transamt;
+                trans.unusedamt = trans.inputamt;
+                ret = ats.DoTransByTransType();
+                if(ret)
+                    return ret;
+                if(amtcmp(ats.trans.unusedamt, 0) > 0)
+                    return E_INPUT_AMT;
+                if(amtcmp(ats.trans.unusedamt, 0) < 0)
+                    return E_AMT_LACK;
+            }
+            break;
+        default:
+            LOG(ERROR, "unknown datatpe=[" << posdata.datatype << "]");
+            return ERRIF_DATA;
+    }
+    ret = UpdCardBalByAccno(trans.cardaccno, D4U5(posdata.cardaftbal / 100.0), TF_PAY, posdata.paycnt + 1, 0, 1);
+    if(ret)
+        return ret;
+    //添加卡交易流水表
+    T_t_transdtl transdtl;
+    memset(&transdtl, 0, sizeof(transdtl));
+    des2src(transdtl.refno, trans.refno);
+    des2src(transdtl.transdate, trans.transdate);
+    des2src(transdtl.transtime, trans.transtime);
+    des2src(transdtl.accdate, trans.accdate);
+    des2src(transdtl.acctime, trans.acctime);
+    des2src(transdtl.coldate, string(posdata.recvtime, 8).c_str());
+    des2src(transdtl.coltime, string(posdata.recvtime + 8, 6).c_str());
+    transdtl.termid = trans.termid;
+    transdtl.termseqno = trans.termseqno;
+    transdtl.transcode = trans.transcode;
+    transdtl.cardno = posdata.cardno;
+    transdtl.cardcnt = posdata.paycnt + 1;
+    transdtl.paycnt = posdata.paycnt;
+    transdtl.transflag = TF_PAY;
+    transdtl.cardbefbal = posdata.cardbefbal / 100.0;
+    transdtl.cardaftbal = posdata.cardaftbal / 100.0;
+    transdtl.amount = D4U5(posdata.amount / 100.0);
+    transdtl.managefee = D4U5(posdata.feeamt / 100.0);
+    if(trans.revflag)
+    {
+        transdtl.amount = -transdtl.amount;
+        transdtl.managefee = -transdtl.managefee;
+    }
+    transdtl.custid = trans.custid;
+    transdtl.sysid = posdata.senderid;
+    des2src(transdtl.devphyid, posdata.posphyid);
+    transdtl.devseqno = posdata.posseqno;
+    transdtl.offlineflag = posdata.sendtype;
+    des2src(transdtl.showcardno, tCard.showcardno);
+    transdtl.status = TRANSTATUS_SUCC;
+    if(trans.custid)
+    {
+        GetCustBaseInfoByCustID(trans.custid, trans.custname, trans.stuempno, trans.deptcode);
+    }
+    des2src(transdtl.custname, trans.custname);
+    des2src(transdtl.stuempno, trans.stuempno);
+    if(posdata.withpasswd)
+    {
+        strcpy(transdtl.extdata, "凭密码消费");
+    }
+    ret = DB_t_transdtl_add(&transdtl);
+    if(ret)
+    {
+        if(DB_REPEAT == ret)
+            return E_DB_TRANSDTL_E;
+        else
+            return E_DB_TRANSDTL_I;
+    }
+    return 0;
+}
+static int DoLostDataAcc(const T_t_cardlostdtl& lostdata)
+{
+    int ret = 0;
+    CAccTrans& ats = CAccTrans::GetInst();
+    TRANS& trans = ats.trans;
+    //更新交易位图
+    T_t_card  tCard;
+    memset(&tCard, 0, sizeof(tCard));
+    ret = DB_t_card_read_by_cardno(lostdata.cardno, &tCard);
+    if(ret)
+    {
+        if(DB_NOTFOUND == ret)
+            return E_NOTEXIST_CARDNO;
+        else
+            return E_DB_CARD_R;
+    }
+    T_t_account tAccount;
+    memset(&tAccount, 0, sizeof(tAccount));
+    ret = CardAccInfoReadbyAccno(tCard.accno, &tAccount);
+    if(ret)
+    {
+        return ret;
+    }
+    if(tAccount.status[0] != '1')
+    {
+        LOG(ERROR, "卡号" << lostdata.cardno << "卡账户状态错误");
+        return -1;
+    }
+    trans.usecardflag = 1;
+    trans.custid = tCard.custid;
+    trans.feetype = tCard.feetype;
+    trans.cardno = lostdata.cardno;
+    trans.paycnt = lostdata.paycnt;
+    trans.aftpaycnt = lostdata.paycnt + 1;
+    trans.transflag = TF_PAY;
+    trans.cardbefbal = lostdata.cardbefbal;
+    trans.cardaftbal = lostdata.cardaftbal;
+    trans.usecardflag = 1;
+    trans.cardflag = 1;
+    trans.offlineflag = 1;
+    trans.cardtype = tCard.cardphytype;
+    trans.cardphytype = tCard.cardphytype;
+    des2src(trans.cardaccno, tCard.accno);
+    trans.termid = TERMID_SVR;
+    trans.transcode = TC_POSDRAW;
+    ret = ats.GetTermSeqno();
+    if(ret)
+    {
+        return ret;
+    }
+    ret = ats.GetNewRefno(trans.refno);
+    if(ret)
+        return ret;
+    //正常记录
+    switch(lostdata.datatype)
+    {
+        case 1:
+            trans.transtype = TRANSTYPE_CARD2INCOME_LOST;
+            break;
+        case 2:
+            trans.transtype = TRANSTYPE_CARD2INCOME_WFAILED;
+            break;
+        case 9:
+            trans.transtype = TRANSTYPE_CARD2INCOME_OTHER;
+            break;
+        default:
+            LOG(ERROR, "datatype[" << lostdata.datatype << "] no supported ")
+            return -1;
+    }
+    trans.transamt = D4U5(lostdata.amount / 100.0);
+    trans.inputamt = trans.transamt;
+    trans.unusedamt = trans.inputamt;
+    ret = ats.DoTransByTransType();
+    if(ret)
+        return ret;
+    if(ats.trans.unusedamt > 0)
+        return E_INPUT_AMT;
+    if(ats.trans.unusedamt < 0)
+        return E_AMT_LACK;
+    UpdateCardBitmap(lostdata.cardno, lostdata.paycnt + 1, CARDBITMAPTYPE_POS_OFFLINE);
+    //添加卡交易流水表
+    T_t_transdtl transdtl;
+    memset(&transdtl, 0, sizeof(transdtl));
+    des2src(transdtl.refno, trans.refno);
+    sprintf(transdtl.transdate, "%d", lostdata.transdate);
+    des2src(transdtl.transtime, "000000");
+    des2src(transdtl.accdate, trans.accdate);
+    des2src(transdtl.acctime, trans.acctime);
+    sprintf(transdtl.coldate, "%d", lostdata.createdate);
+    transdtl.termid = trans.termid;
+    transdtl.termseqno = trans.termseqno;
+    transdtl.transcode = trans.transcode;
+    transdtl.cardno = lostdata.cardno;
+    transdtl.cardcnt = lostdata.paycnt + 1;
+    transdtl.paycnt  = lostdata.paycnt;
+    transdtl.transflag = TF_PAY;
+    transdtl.cardbefbal = lostdata.cardbefbal / 100.0;
+    transdtl.cardaftbal = lostdata.cardaftbal / 100.0;
+    transdtl.amount = D4U5(lostdata.amount / 100.0);
+    transdtl.managefee = 0;
+    transdtl.custid = trans.custid;
+    transdtl.sysid = 0;
+    transdtl.offlineflag = POSDATATYPE_ADDLOST;
+    des2src(transdtl.showcardno, tCard.showcardno);
+    transdtl.status = TRANSTATUS_SUCC;
+    if(trans.custid)
+    {
+        GetCustBaseInfoByCustID(trans.custid, trans.custname, trans.stuempno, trans.deptcode);
+    }
+    des2src(transdtl.custname, trans.custname);
+    des2src(transdtl.stuempno, trans.stuempno);
+    switch(lostdata.datatype)
+    {
+        case 1:
+            strcpy(transdtl.extdata, "补记丢失流水");
+            break;
+        case 2:
+            strcpy(transdtl.extdata, "补记中途拔卡流水");
+            break;
+        default:
+            strcpy(transdtl.extdata, "补记流水");
+            break;
+    }
+    ret = DB_t_transdtl_add(&transdtl);
+    if(ret)
+    {
+        if(DB_REPEAT == ret)
+            return E_DB_TRANSDTL_E;
+        else
+            return E_DB_TRANSDTL_I;
+    }
+    return 0;
+}
+static int DoPosDataAcc(T_t_posdata& posdata)
+{
+    int ret = 0;
+    CAccTrans& ats = CAccTrans::GetInst();
+    TRANS& trans = ats.trans;
+    ret = ats.Reset();
+    if(ret)
+        return ret;
+    if(posdata.cardno < 1)
+    {
+        posdata.status = 5;
+        return ERRINFO(E_NOTEXIST_CARDNO, posdata.cardno);
+    }
+    trans.offlineflag = 1;
+    trans.usecardflag = 1;
+    trans.cardflag = 1;
+    trans.cardno = posdata.cardno;
+    posdata.status = 2;
+    ret = GetDevIdByDevPhyId(&(trans.termid), posdata.posphyid);
+    if(ret)
+    {
+        return ret;
+    }
+    sprintf(trans.transdate, "%08d", posdata.transdate);
+    sprintf(trans.transtime, "%06d", posdata.transtime);
+
+    if(80 == posdata.datatype)
+    {
+        ret = SaveLockCardPosData(posdata);
+        if(ret)
+            return ret;
+        posdata.status = 9;
+        return 0;
+    }
+    if(posdata.reversed != 1)
+    {
+        if(posdata.cardbefbal - posdata.cardaftbal != posdata.amount)
+        {
+            LOG(ERROR, "posdtl amount:" << posdata.amount);
+            posdata.status = 4;
+            return E_999_AMT;                         //上传流水交易发生金额有误
+        }
+    }
+    else
+    {
+        if(posdata.cardaftbal - posdata.cardbefbal != posdata.amount)
+        {
+            LOG(ERROR, "posdata cardaftbal-cardbefbal error");
+            posdata.status = 4;
+            return E_999_AMT;                         //上传流水交易发生金额有误
+        }
+    }
+    if(posdata.cardbefbal < 0 || posdata.cardaftbal < 0)
+    {
+        LOG(ERROR, "posdata cardaftbal or cardbefbal error");
+        posdata.status = 4;
+        return E_999_AMT;                         //上传流水交易发生金额有误
+    }
+    if((posdata.amount < 0) || (posdata.amount >= 1000000) || (posdata.cardbefbal > 5000000))
+    {
+        LOG(ERROR, "posdata cardaftbal or cardbefbal error");
+        posdata.status = 4;
+        return E_999_AMT;                         //上传流水交易发生金额有误
+    }
+    //中途拔卡流水处理
+    if(9 != posdata.updresult)
+    {
+        ret = SaveUpdCardFailPosData(posdata);
+        if(ret)
+            return ret;
+        posdata.status = 9;
+        return 0;
+    }
+    //如果搭伙费达到发生额的%50,报错.
+    switch(posdata.datatype)
+    {
+        case 10://纯消费流水
+            if((posdata.feeamt != 0) || (posdata.amount != posdata.payamt))
+            {
+                LOG(ERROR, "posdtl amount:" << posdata.amount);
+                posdata.status = 4;
+                return E_999_AMT;                         //上传流水交易发生金额有误
+            }
+        case 20://带搭伙费流水
+            if((posdata.feeamt < 0) || (posdata.amount != posdata.payamt + posdata.feeamt))
+            {
+                LOG(ERROR, "posdtl amount:" << posdata.amount);
+                posdata.status = 4;
+                return E_999_AMT;                         //上传流水交易发生金额有误
+            }
+            break;
+        case 30://带折扣流水
+            if((posdata.feeamt > 0) || (posdata.amount != posdata.payamt + posdata.feeamt))
+            {
+                LOG(ERROR, "posdtl amount:" << posdata.amount);
+                posdata.status = 4;
+                return E_999_AMT;                         //上传流水交易发生金额有误
+            }
+            break;
+        default:
+            //记录失败流水
+            posdata.status = 4;
+            return E_999_0XFF;  //把返回码置为交易标记
+    }
+    ret = PosDataProcess(posdata);
+    if(ret)
+        return ret;
+    posdata.status = 3;
+    strcpy(posdata.remark, "成功");
+    return 0;
+}
+static int DoBatchAcc(POSDATAVECT& PosDataVect)
+{
+    CAccTrans& ats = CAccTrans::GetInst();
+    int ret = ats.CheckCfgUpdate();
+    if(ret)
+        return ret;
+    for(unsigned int i = 0; i < PosDataVect.size(); i++)
+    {
+        ret = ats.Reset();
+        if(ret)
+            return ret;
+        ret = DoPosDataAcc(PosDataVect[i]);
+        if(ret)
+        {
+            PosDataVect[i].errcode = ret;
+            LOG(ERROR, "DoPosDataAcc cardno[" << PosDataVect[i].cardno << "] paycnt[" << PosDataVect[i].paycnt << "] Error[ret]=" << ret);
+            ret = db_rollback();
+            if(ret)
+            {
+                LOG(ERROR, "db_rollback error[ret]=" << ret);
+                return ret;
+            }
+        }
+        ret = UpdPosDataStatusByID(PosDataVect[i].id, PosDataVect[i].errcode, PosDataVect[i].status);
+        if(ret)
+        {
+            LOG(ERROR, "UpdPosDataStatusByID Error ret[" << ret << "]transdate[" << PosDataVect[i].transdate << "]posphyid[" << PosDataVect[i].posphyid << "]posseqno[" << PosDataVect[i].posseqno << "]");
+            db_rollback();
+            return ret;
+        }
+        ret = db_commit();
+        if(ret)
+        {
+            db_rollback();
+            LOG(ERROR, "db_commit error ret=" << ret);
+            return ret;
+        }
+    }
+    return 0;
+}
+static int DoBatchLostData()
+{
+    CAccTrans& ats = CAccTrans::GetInst();
+
+    CARDLOSTDATAVECT CardLostDataVect;
+    GetCardLostDataVect(CardLostDataVect);
+    if(CardLostDataVect.empty())
+    {
+        LOG(DEBUG, "没有需要处理的补记流水");
+        return 0;
+    }
+    int ret = ats.CheckCfgUpdate();
+    if(ret)
+        return ret;
+    for(unsigned int i = 0; i < CardLostDataVect.size(); i++)
+    {
+        ret = ats.Reset();
+        if(ret)
+            return ret;
+        int result = DoLostDataAcc(CardLostDataVect[i]);
+        if(result)
+        {
+
+            LOG(ERROR, "DoLostDataAcc cardno[" << CardLostDataVect[i].cardno << "] paycnt[" << CardLostDataVect[i].paycnt << "] Error[ret]=" << result);
+            ret = db_rollback();
+            if(ret)
+            {
+                LOG(ERROR, "db_rollback error[ret]=" << ret);
+                return ret;
+            }
+        }
+        T_t_cardlostdtl cardlostdtl;
+        memset(&cardlostdtl, 0, sizeof(cardlostdtl));
+        ret = DB_t_cardlostdtl_read_lock_by_c0_and_cardno_and_dpscnt_and_paycnt_and_cardbefbal(
+                  CardLostDataVect[i].cardno, CardLostDataVect[i].dpscnt, CardLostDataVect[i].paycnt,
+                  CardLostDataVect[i].cardbefbal, &cardlostdtl);
+        if(ret)
+        {
+            return E_DB_ERROR;
+        }
+        if(cardlostdtl.handled)
+        {
+            DB_t_cardlostdtl_free_lock_by_c0();
+            db_rollback();
+            continue;
+        }
+        if(result != 0)
+        {
+            cardlostdtl.handled = 2;
+        }
+        else
+        {
+            cardlostdtl.handled = 1;
+            cardlostdtl.accdate = atoi(ats.trans.accdate);
+        }
+        ret = DB_t_cardlostdtl_update_lock_by_c0(&cardlostdtl);
+        if(ret)
+        {
+            LOG(ERROR, "DB_t_cardlostdtl_update_lock_by_c0 ret=" << ret);
+            return E_DB_ERROR;
+        }
+        ret = db_commit();
+        if(ret)
+        {
+            db_rollback();
+            LOG(ERROR, "db_commit error ret=" << ret);
+            return ret;
+        }
+    }
+    return 0;
+}
+static int DoBatchClosedAccount(ACCTVECT& acctVect)
+{
+    CAccTrans& ats = CAccTrans::GetInst();
+    int ret = ats.CheckCfgUpdate();
+    if(ret)
+        return ret;
+    for(unsigned int i = 0; i < acctVect.size(); i++)
+    {
+        ret = ProcessClosedAccount(acctVect[i]);
+        if(ret)
+        {
+            LOG(ERROR, "DoBatchClosedAccount accno[" << acctVect[i].accno << "] balance[" << acctVect[i].balance << "] Error ret=" << ret);
+            ret = db_rollback();
+            if(ret)
+            {
+                LOG(ERROR, "db_rollback error ret=" << ret);
+                return ret;
+            }
+        }
+        ret = db_commit();
+        if(ret)
+        {
+            db_rollback();
+            LOG(ERROR, "db_commit error ret=" << ret);
+            return ret;
+        }
+    }
+    return 0;
+}
+static bool init_config(string pathname, string& connectinfo, string& logconf)
+{
+    try
+    {
+        ConfigFile config(pathname);
+        try
+        {
+            config.readInto(connectinfo, "connectinfo");
+            config.readInto(logconf, "logconf");
+        }
+        catch(ConfigFile::key_not_found& ex)
+        {
+            cout << "read " << ex.key << " faild" << endl;
+            return false;
+        }
+        return true;
+    }
+    catch(ConfigFile::file_not_found& ex)
+    {
+        cout << "read file " << ex.filename << " faild " << endl;
+        return false;
+    }
+}
+int main(int argc, char *argv[])
+{
+    int ret = 0;
+    const long check_interval = 3600;//1小时
+    time_t last_check = - check_interval;
+    time_t now = 0;
+    bool bBusFlag = false;
+    char  szVerNo[61] = {0};
+    sprintf(szVerNo, "%s.%s %s (%s %s)", argv[0], APP_USER, YKT_VERSION, __DATE__, __TIME__);
+    const char short_opts[] = "vbp";
+    int option;
+    while((option = getopt(argc, argv, short_opts)) != -1)
+    {
+        switch(option)
+        {
+            case 'v':
+                printf("%s\n", szVerNo);
+                return 0;
+            case 'b':
+                bBusFlag = true;
+                break;
+            case 'p':
+                bBusFlag = false;
+                break;
+            default:
+                printf("%s -v -b\n", argv[0]);
+                return -1;
+        }
+    }
+    string conf = argv[0];
+    conf = conf + ".conf";
+
+    string connectinfo;
+    string logconf;
+    if(!init_config(conf, connectinfo, logconf))
+    {
+        cout << "init_config failed!";
+        return -1;
+    }
+    if(!init_logger(logconf))
+    {
+        cout << "server init log faild" << endl;
+        return -2;
+    }
+    LOG(DEBUG, "init ok");
+    char errmsg[512] = {0};
+    char szConnectInfo[256];
+    bool r = edb_get_db_url(NULL, "ecard", szConnectInfo, errmsg);
+    if(!r)
+    {
+        LOG(ERROR, "读取数据库连接参数失败" << errmsg);
+        if(connectinfo.size() < 1)
+            return -3;
+        LOG(INFO, "使用本地配置文件" << conf << "中的数据库连接连接");
+        ret = ConnectDb(connectinfo.c_str());
+    }
+    else
+    {
+        connectinfo = szConnectInfo;
+        ret = ConnectDb(connectinfo.c_str());
+    }
+    if(ret)
+    {
+        LOG(ERROR, "连接数据库失败，系统启动失败");
+        return ret;
+    }
+    LOG(DEBUG, "connect database ok");
+    CAccTrans& ats = CAccTrans::GetInst();
+    ret = ats.LoadCfg();
+    if(ret)
+    {
+        LOG(ERROR, "loadcfg ret=" << ret);
+        return ret;
+    }
+    //交易正常则进行下面的处理
+    POSDATAVECT PosDataRect;
+    while(1)
+    {
+        ret = 0;
+        if(!IsDatabaseConnect())
+        {
+            LOG(INFO, "reconnect database ...");
+            ret = ConnectDb(connectinfo.c_str());
+            if(ret)
+            {
+                LOG(ERROR, "connect to database error");
+                sleep(30);
+                continue;
+            }
+        }
+        GetPosDataVect(PosDataRect, 1);
+        if(PosDataRect.size())
+            DoBatchAcc(PosDataRect);
+        else
+        {
+            sleep(5);
+        }
+        now = time(0);
+        if(now - last_check >= check_interval)
+        {
+            last_check = now;
+            //处理补记流水入账
+            DoBatchLostData();
+            //处理异常流水
+            UpdPosDataExceptStatus();
+            //处理不平金额
+            ACCTVECT acctVect;
+            GetClosedAccountVect(acctVect);
+            if(acctVect.size())
+                DoBatchClosedAccount(acctVect);
+        }
+    }
+    db_disconnect();
+    exit(0) ;
+}

@@ -1,0 +1,26 @@
+create table t_closetask
+(
+  cardno number,
+  applyid number,
+  custid number,
+  cardamt number,
+  subsidyamt number,
+  foregiftamt number,
+  wateramt number,
+  frozedate number,
+  plandate number,
+  closedate number,
+  status number,
+  remark varchar2(240)
+)
+begin
+action modename none end
+action add end
+action read_by cardno end
+action update_by cardno end
+action del_by cardno end
+action read_lock_by c0 cardno end
+action update_lock_by c0 end
+action del_lock_by c0 end
+action free_lock_by c0 end
+end

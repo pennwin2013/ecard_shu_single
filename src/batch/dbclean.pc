@@ -1,0 +1,796 @@
+/* --------------------------------------------
+ * 创建日期: 9 17 2004
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 数据备份与清理程序
+ * --------------------------------------------*/
+
+#include "pubdef.h"
+#include "errdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include <stdlib.h>
+#include <vector>
+#include <string>
+#include <iostream>
+#include <sstream>
+#include <algorithm>
+#include "ecarddbcfg.h"
+#include "ConfigFile.h"
+#include "logger_imp.h"
+
+using namespace std;
+static bool g_bForce = false;
+EXEC SQL INCLUDE SQLCA;
+typedef vector<string> TABLEVECT;
+
+static int GetMinYearMonth(const char* tablename, char* yearmonth)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        char        ho_accdate[9] = {0};            //表名
+        char    h_sqlcmd[256]; //记账日期
+        short h_idr;
+    EXEC SQL END DECLARE SECTION;
+    SQLCODE = 0;
+    sprintf(h_sqlcmd, "select min(accdate) from %s ", tablename);
+    EXEC SQL PREPARE minyearmonth_stmt FROM :h_sqlcmd;
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__, __LINE__, &sqlca);
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE minyearmonth_cur CURSOR FOR minyearmonth_stmt;
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__, __LINE__, &sqlca);
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN minyearmonth_cur;
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__, __LINE__, &sqlca);
+        return E_DB_CURSOR_OPEN;
+    }
+    EXEC SQL FETCH minyearmonth_cur into :ho_accdate:h_idr;
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__, __LINE__, &sqlca);
+        EXEC SQL CLOSE minyearmonth_cur;
+        return E_DB_CURSOR_FETCH;
+    }
+    EXEC SQL CLOSE minyearmonth_cur;
+    db_trim(ho_accdate);
+    strncpy(yearmonth, ho_accdate, 6);
+    yearmonth[6] = 0;
+    LOG(DEBUG, "tablename[" << tablename << "]min yearmonth[" << yearmonth << "]");
+    return 0;
+}
+int CalcNextYearMonth(const char *szYearMonth, char* szNextYearMonth)
+{
+    if(strlen(szYearMonth) != 6)
+        return -1;
+    int num = atoi(szYearMonth);
+    int year = num / 100;
+    int month = num % 100;
+    if(month < 12)
+        month++;
+    else
+    {
+        month = 1;
+        year++;
+    }
+    sprintf(szNextYearMonth, "%4d%02d", year, month);
+    return 0;
+}
+//取最近一个备份表名
+bool GetLastBackTable(const char* tablename, char *lastbacktable)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        char    ho_lastbacktablename[61] = {0};         //表名
+        char  h_sqlcmd[2048];
+    EXEC SQL END DECLARE SECTION;
+    ostringstream sql;
+    //sql << " select max(table_name) from user_tables where table_name like '" << tablename << "20____'";
+    sql << " select max(table_name) from user_tables where regexp_like(table_name,upper('" << tablename << "')||'20\\d{4}$')";
+    strcpy(h_sqlcmd, sql.str().c_str());
+    SQLCODE = 0;
+    EXEC SQL PREPARE lastbacktable_stmt FROM :h_sqlcmd;
+    if(SQLCODE)
+    {
+        LOG(ERROR, "sql[" << h_sqlcmd << "]");
+        db_chk_err(__FILE__, __LINE__, &sqlca);
+        return false;
+    }
+    EXEC SQL DECLARE lastbacktable_cur CURSOR FOR lastbacktable_stmt;
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__, __LINE__, &sqlca);
+        return false;
+    }
+    EXEC SQL  OPEN lastbacktable_cur;
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__, __LINE__, &sqlca);
+        return false;
+    }
+    int ret = 0;
+    EXEC SQL FETCH lastbacktable_cur INTO
+    :ho_lastbacktablename;
+    if(SQLCODE)
+    {
+        ret = SQLCODE;
+        EXEC SQL CLOSE lastbacktable_cur;
+        if(DB_NULL == ret)
+        {
+            return false;
+        }
+        else
+        {
+            db_chk_err(__FILE__, __LINE__, &sqlca);
+            return false;
+        }
+    }
+    EXEC SQL CLOSE lastbacktable_cur;
+    db_trim(ho_lastbacktablename);
+    strcpy(lastbacktable, ho_lastbacktablename);
+    return true;
+}
+static int GetRecordCount(const char* tablename, const char* where, int& count)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        char    h_sqlcmd[1024] = ""; //记账日期
+        sqlint32 ho_count = 0;      //记录条数
+    EXEC SQL END DECLARE SECTION;
+    count = 0;
+    sprintf(h_sqlcmd, "select count(*) cnt from %s ", tablename);
+    if(where && strlen(where))
+    {
+        strcat(h_sqlcmd, where);
+    }
+    SQLCODE = 0;
+    EXEC SQL PREPARE recordcnt_stmt FROM :h_sqlcmd;
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__, __LINE__, &sqlca);
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE recordcnt_cur CURSOR FOR recordcnt_stmt;
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__, __LINE__, &sqlca);
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN recordcnt_cur;
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__, __LINE__, &sqlca);
+        return E_DB_CURSOR_OPEN;
+    }
+    EXEC SQL FETCH recordcnt_cur into :ho_count;
+    if(SQLCODE)
+    {
+        db_chk_err(__FILE__, __LINE__, &sqlca);
+        EXEC SQL CLOSE recordcnt_cur;
+        return E_DB_CURSOR_FETCH;
+    }
+    EXEC SQL CLOSE recordcnt_cur;
+    count = ho_count;
+    if(where)
+    {
+        LOG(DEBUG, "tablename[" << tablename << where << "]recordcount[" << ho_count << "]");
+    }
+    else
+    {
+        LOG(DEBUG, "tablename[" << tablename << "]recordcount[" << ho_count << "]");
+    }
+    return 0;
+}
+static int CleanOrigTable(const char* tablename, const char* where)
+{
+    int ret;
+    //开始清除数据
+    stringstream sql;
+    sql << "delete from " << tablename << " " << where << " and rownum<=10000";
+    int effectrows = 0;
+    for(int i = 1;; i++)
+    {
+        SQLCODE = 0;
+        ret = dynamic_execute_sql(sql.str().c_str(), &effectrows);
+        if(ret)
+        {
+            if(DB_NOTFOUND == ret)
+                break;
+            else
+            {
+                db_rollback();
+                cout << "exec sql:" << sql.str() << " retcode=" << ret << endl;
+                LOG(ERROR, "exec retcode=" << ret << ",sql:" << sql.str());
+                return ret;
+            }
+        }
+        LOG(INFO, "No." << i << " exec sql:" << sql.str());
+        ret = db_commit();
+        if(ret)
+        {
+            db_rollback();
+            return ret;
+        }
+        if(0 == i % 10)
+            sleep(5);//防止事务太大,sleep 10秒给oracle 归档日志
+    }
+    return 0;
+}
+static int CheckBackupResult(const char* backyearmonth, const char* tablename, const char* where)
+{
+    //读取原始表记录
+    int ret = 0;
+    char szBackTable[61];
+    sprintf(szBackTable, "%s%s", tablename, backyearmonth);
+    int totalcnt = 0;
+    int backcnt = 0;
+    ret = GetRecordCount(tablename, where, totalcnt);
+    if(ret)
+        return ret;
+    ret = GetRecordCount(szBackTable, NULL, backcnt);
+    if(ret)
+        return ret;
+    if(totalcnt != backcnt)
+    {
+        LOG(ERROR, "backup error,total count=" << totalcnt << " backup count=" << backcnt);
+        return -1;
+    }
+    return 0;
+}
+static int BackupTable(const char* backyearmonth, const char* tablename)
+{
+    int ret = 0;
+    char where[256];
+    sprintf(where, " where accdate like '%s%%'", backyearmonth);
+    stringstream sql;
+    sql << "create table " << tablename << backyearmonth << " tablespace TS_YKT_HIS as ";
+    sql << " select * from " << tablename << where;
+    SQLCODE = 0;
+    int effectrows = 0;
+    ret = dynamic_execute_sql(sql.str().c_str(), &effectrows);
+    if(ret)
+    {
+        LOG(ERROR, "dynamic_execute_sql ret=" << ret << ",sql:" << sql.str());
+        return ret;
+    }
+    LOG(DEBUG, "CreateNewBackTable OK tablename:" << tablename << ",back month:" << backyearmonth);
+    ret = CheckBackupResult(backyearmonth, tablename, where);
+    if(ret)
+    {
+        LOG(ERROR, "CheckBackupResult ret=" << ret << ",sql:" << sql.str());
+        return ret;
+    }
+    ret = CleanOrigTable(tablename, where);
+    if(ret)
+    {
+        LOG(ERROR, "CleanOrigTable ret=" << ret << ",table:" << tablename << ",back month:" << backyearmonth);
+        return ret;
+    }
+    LOG(DEBUG, "CleanOrigTable OK tablename:" << tablename << ",where:" << where);
+    return 0;
+}
+static int ProcessLastBackup(const char* lastbackyearmonth, const char* tablename)
+{
+    //读取原始表记录
+    int ret = 0;
+    if(strlen(lastbackyearmonth) != 6)
+    {
+        LOG(ERROR, "lastbackyearmonth=" << lastbackyearmonth << " error");
+        return -1;
+    }
+    char szBackTable[61];
+    sprintf(szBackTable, "%s%s", tablename, lastbackyearmonth);
+    char where[256];
+    sprintf(where, " where accdate like '%s%%'", lastbackyearmonth);
+    int totalcnt = 0;
+    int backcnt = 0;
+    ret = GetRecordCount(tablename, where, totalcnt);
+    if(ret)
+        return ret;
+    ret = GetRecordCount(szBackTable, NULL, backcnt);
+    if(ret)
+        return ret;
+    if(0 == totalcnt)
+        return 0;
+    if(totalcnt > backcnt)
+    {
+        LOG(ERROR, "last backup error,date=" << lastbackyearmonth << ",orig record count=" << totalcnt << ",backup table record count=" << backcnt);
+        return -1;
+    }
+    if(totalcnt < backcnt)
+    {
+        LOG(ERROR, "last backup error,date=" << lastbackyearmonth << ",orig record count=" << totalcnt << ",backup table record count=" << backcnt);
+        if(!g_bForce)
+            return -2;
+    }
+    ret = CleanOrigTable(tablename, where);
+    if(ret)
+    {
+        LOG(ERROR, "CleanOrigTable ret=" << ret << ",table:" << tablename << ",back month:" << lastbackyearmonth);
+        return ret;
+    }
+    return 0;
+}
+
+static bool init_config(string pathname, string& connectinfo, string& logconf)
+{
+    try
+    {
+        ConfigFile config(pathname);
+        try
+        {
+            config.readInto(connectinfo, "connectinfo");
+            config.readInto(logconf, "logconf");
+        }
+        catch(ConfigFile::key_not_found& ex)
+        {
+            cout << "read " << ex.key << " faild" << endl;
+            return false;
+        }
+        return true;
+    }
+    catch(ConfigFile::file_not_found& ex)
+    {
+        cout << "read file " << ex.filename << " faild " << endl;
+        return false;
+    }
+}
+static int ProcessBackup(const char* szTable)
+{
+    char szSettleDate[9] = {0};
+    int ret = GetSysParaVal(SYSPARA_SETTLEDATE, szSettleDate);
+    if(ret)
+    {
+        LOG(ERROR, "query settle error");
+        return ret;
+    }
+    char szToday[9] = {0};
+    ret = db_getsysdate(szToday);
+    if(ret)
+    {
+        LOG(ERROR, "query sysdate error");
+        return ret;
+    }
+    if(strncmp(szSettleDate, szToday, 8) > 0)
+    {
+        LOG(ERROR, "系统错误:当前结算日期大于系统日期");
+        return -1;
+    }
+    LOG(DEBUG, "settle date:" << szSettleDate);
+    //检查数据字典是否存在该表
+    char szLastBackTable[61] = {0};
+    bool bExist = GetLastBackTable(szTable, szLastBackTable);
+    if(!bExist)
+    {
+        char szMinYearMonth[7] = {0};
+        ret = GetMinYearMonth(szTable, szMinYearMonth);
+        if(ret)
+        {
+            return ret;
+        }
+        if((strlen(szMinYearMonth) < 1) || (strncmp(szMinYearMonth, szSettleDate, 6) >= 0)) //比较当前月份
+        {
+            LOG(INFO, "条件不满足," << szTable << "无需备份");
+            return 0;
+        }
+        //开始备份
+        ret = BackupTable(szMinYearMonth, szTable);
+        if(ret)
+        {
+            LOG(ERROR, "BackupTable ret=" << ret << ",table:" << szTable << ",back month:" << szMinYearMonth);
+            return ret;
+        }
+        LOG(INFO, "BackupTable OK " << "table:" << szTable << ",back month:" << szMinYearMonth);
+        LOG(INFO, "备份月份" << szMinYearMonth << " 表" << szTable << "备份成功");
+    }
+    else
+    {
+        //最近的备份月份
+        char szLastYearMonth[7] = {0};
+        memcpy(szLastYearMonth, szLastBackTable + strlen(szTable), 6);
+        //检查上一次的备份是否成功
+        ret = ProcessLastBackup(szLastYearMonth, szTable);
+        if(ret)
+        {
+            LOG(ERROR, "ProcessLastBackup ret=" << ret << ",table:" << szTable << ",back month:" << szLastYearMonth);
+            return ret;
+        }
+        LOG(INFO, "ProcessLastBackup OK " << "table:" << szTable << ",back month:" << szLastYearMonth);
+        //计算下一个备份月份
+        char szNextYearMonth[7] = {0};
+        ret = CalcNextYearMonth(szLastYearMonth, szNextYearMonth);
+        if(ret)
+            return ret;
+        if(strncmp(szNextYearMonth, szSettleDate, 6) >= 0)
+        {
+            LOG(INFO, szTable << "表已经备份完成");
+            return 0;
+        }
+        //开始备份
+        ret = BackupTable(szNextYearMonth, szTable);
+        if(ret)
+        {
+            LOG(ERROR, "BackupTable ret=" << ret << ",table:" << szTable << ",back month:" << szNextYearMonth);
+            return ret;
+        }
+        LOG(INFO, "BackupTable OK " << "table:" << szTable << ",back month:" << szNextYearMonth);
+        LOG(INFO, "备份月份" << szNextYearMonth << " 表" << szTable << "备份成功");
+    }
+    return 0;
+}
+static int ReCreateKey(const char* szOwner, const char* szTable)
+{
+    char  sqlcmd[256];
+    sprintf(sqlcmd, " begin  p_recreatekey('%s','%s'); end;", szOwner, szTable);
+    int ret = dynamic_execute_sql(sqlcmd, NULL);
+    if(ret)
+    {
+        LOG(ERROR, "RebuildKey ret=" << ret);
+        return ret;
+    }
+    return 0;
+}
+static int ReCreateIndex(const char* szOwner, const char* szTable)
+{
+    char  sqlcmd[256];
+    sprintf(sqlcmd, " begin  p_recreateindex('%s','%s'); end;", szOwner, szTable);
+    int ret = dynamic_execute_sql(sqlcmd, NULL);
+    if(ret)
+    {
+        LOG(ERROR, "RebuildIndex ret=" << ret);
+        return ret;
+    }
+    return 0;
+}
+static int RebuildView(const char* szOwner, const char* szTable)
+{
+    char  sqlcmd[256];
+    sprintf(sqlcmd, " begin  p_rebuildview('%s'); end;", szTable);
+    int ret = dynamic_execute_sql(sqlcmd, NULL);
+    if(ret)
+    {
+        LOG(ERROR, "RebuildView ret=" << ret);
+        return ret;
+    }
+    return 0;
+}
+static int RebuildAllIndex(const char* szOwner)
+{
+    char  sqlcmd[256];
+    sprintf(sqlcmd, " begin  p_rebuildallindex('%s'); end;", szOwner);
+    int ret = dynamic_execute_sql(sqlcmd, NULL);
+    if(ret)
+    {
+        LOG(ERROR, "RebuildAllIndex ret=" << ret);
+        return ret;
+    }
+    return 0;
+}
+static int GetDtlTableVect(const char *sSettleDate, const char *sStartAccDate, const char *sDtlTabName, TABLEVECT& DtlTabVect)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        char ho_tablename[256] = "";
+        char h_sqlcmd[1024] = "";
+        sqlint16 indicator = 0;
+    EXEC SQL END DECLARE SECTION;
+    int ret = 0;
+    string sStartMonth(sStartAccDate, 6);
+    if(DtlTabVect.size())
+        DtlTabVect.clear();
+    stringstream sql;
+    //sql << " select table_name from user_tables where table_name like '" << sDtlTabName << "20____'";
+    sql << " select table_name from user_tables where regexp_like(table_name,upper('" << sDtlTabName << "')||'20\\d{4}$')";
+    sql << " and table_name>='" << sDtlTabName << sStartMonth << "'";
+    sql << " order by table_name";
+    strcpy(h_sqlcmd, sql.str().c_str());
+    EXEC SQL PREPARE query_stmt FROM :h_sqlcmd;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_PREPARE;
+    }
+    EXEC SQL DECLARE tab_cur CURSOR FOR query_stmt;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL  OPEN tab_cur;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1)
+    {
+        memset(&ho_tablename, 0, sizeof(ho_tablename));
+
+        EXEC SQL FETCH tab_cur INTO
+        :ho_tablename:indicator;
+        if(SQLCODE)
+        {
+            ret = SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE tab_cur;
+            if(DB_NOTFOUND == ret)
+            {
+                break;
+            }
+            else
+                return E_DB_ERROR;
+        }
+        db_trim(ho_tablename);
+        DtlTabVect.push_back(ho_tablename);
+    }
+    return 0;
+}
+
+static int RebuildRecentDtl(const char *sSettleDate, const char *sDtlTabName)
+{
+    //重建视图
+    int ret = 0;
+    char szStartAccDate[9] = {0};
+    TABLEVECT DtlTabVect;
+    calcEndDate(sSettleDate, -100, szStartAccDate);
+    ret = GetDtlTableVect(sSettleDate, szStartAccDate, sDtlTabName, DtlTabVect);
+    if(ret)
+    {
+        LOG(ERROR, "GetDtlTableVect failed!,SettleDate[" << sSettleDate << "]StartAccdate[" << szStartAccDate << "]TableName[" << sDtlTabName << "]");
+        return ret;
+    }
+    stringstream sql;
+    sql << " create or replace view V_RECENT" << sDtlTabName + 2 << "  as " << endl; //去掉T_
+    sql << " select * from " << sDtlTabName << endl;
+    for(unsigned int i = 0; i < DtlTabVect.size(); i++)
+    {
+        sql << " union all " << endl;
+        sql << " select * from " << DtlTabVect[i] << endl;
+    }
+    int effectrows = 0;
+    ret = dynamic_execute_sql(sql.str().c_str(), &effectrows);
+    if(ret)
+    {
+        if(ret != DB_NOTFOUND)
+        {
+            LOG(ERROR, "exec sql:" << sql.str() << " sqlcode=" << ret);
+            return ret;
+        }
+    }
+    return 0;
+}
+
+int main(int argc, char *argv[])
+{
+    int ret = 0;
+    char  szVerNo[61] = {0};
+    sprintf(szVerNo, "%s.%s %s (%s %s)", argv[0], APP_USER, YKT_VERSION, __DATE__, __TIME__);
+    const char short_opts[] = "vfTt:";
+    int option;
+    vector<string> tableVect;
+    int iHour = 2;
+    g_bForce = false;
+    while((option = getopt(argc, argv, short_opts)) != -1)
+    {
+        switch(option)
+        {
+            case 'v':
+                printf("%s\n", szVerNo);
+                return 0;
+            case 'f':
+                g_bForce = true;
+                break;
+            case 'T':
+            {
+                string s(optarg);
+                transform(s.begin(), s.end(), s.begin(), ::toupper);
+                tableVect.push_back(s);
+            }
+            break;
+            case 't':
+                if(strlen(optarg) > 0)
+                    iHour = atoi(optarg);
+                break;
+            default:
+                printf("%s -v -f\n", argv[0]);
+                return -1;
+        }
+    }
+    string conf = argv[0];
+    conf = conf + ".conf";
+
+    string connectinfo;
+    string logconf;
+    if(!init_config(conf, connectinfo, logconf))
+    {
+        cout << "init_config failed!";
+        return -1;
+    }
+    if(!init_logger(logconf))
+    {
+        cout << "server init log faild" << endl;
+        return -2;
+    }
+    LOG(DEBUG, "init ok");
+    LOG(INFO, "数据清理进行时间:" << iHour << "(小时)");
+    char errmsg[512] = {0};
+    char szConnectInfo[256];
+    bool r = edb_get_db_url(NULL, "ecard", szConnectInfo, errmsg);
+    if(!r)
+    {
+        LOG(ERROR, "读取数据库连接参数失败" << errmsg);
+        if(connectinfo.size() < 1)
+            return -3;
+        LOG(INFO, "使用本地配置文件" << conf << "中的数据库连接连接");
+    }
+    else
+    {
+        connectinfo = szConnectInfo;
+    }
+    while(1)
+    {
+        ret = ConnectDb(connectinfo.c_str());
+        if(ret)
+        {
+            LOG(ERROR, "连接数据库失败，系统启动失败");
+            return ret;
+        }
+        LOG(DEBUG, "connect database ok");
+        char szSysTime[7] = {0};
+        ret = db_getsystime(szSysTime);
+        if(ret)
+        {
+            db_disconnect();
+            LOG(ERROR, "db_getsystime ret=" << ret);
+            return ret;
+        }
+        LOG(DEBUG, "now service system time:" << szSysTime);
+        char szHour[3] = {0};
+        memcpy(szHour, szSysTime, 2);
+        int iSysHour = atoi(szHour);
+        if(iSysHour == iHour)
+        {
+            LOG(INFO, "开始执行");
+            break;
+        }
+        db_disconnect();
+        sleep(2000);
+    }
+    char szSettleDate[9] = {0};
+    ret = GetSysParaVal(SYSPARA_SETTLEDATE, szSettleDate);
+    if(ret)
+    {
+        LOG(ERROR, "get settledate error ret=" << ret);
+        db_disconnect();
+        return -1;
+    }
+    T_t_servicelog servicelog;
+    memset(&servicelog, 0, sizeof(servicelog));
+    servicelog.settledate = atoi(szSettleDate);
+    des2src(servicelog.servicename, "dbclean");
+    db_getsysdatetime2(servicelog.starttime);
+    ret = DB_t_servicelog_add(&servicelog);
+    if(ret)
+    {
+        if(DB_REPEAT == SQLCODE)
+        {
+            LOG(INFO, "结算日期" << szSettleDate << "该服务已经执行过");
+            return 0;
+        }
+        else
+        {
+            LOG(ERROR, "insert t_servicelog ret=" << ret);
+            db_disconnect();
+            return -1;
+        }
+    }
+    char szOwner[31] = {0};
+    size_t pos;
+    pos = connectinfo.find("/");
+    if(pos != string::npos)
+    {
+        strncpy(szOwner, connectinfo.c_str(), pos);
+        LOG(DEBUG, "owner:" << szOwner);
+    }
+    else
+    {
+        LOG(ERROR, "get owner error");
+        return -1;
+    }
+    LOG(DEBUG, "connect database ok");
+    if(tableVect.empty())
+    {
+        tableVect.push_back("T_OPERDTL");
+        tableVect.push_back("T_TRANSDTL");
+        tableVect.push_back("T_ACCDTL");
+    }
+    for(size_t i = 0; i < tableVect.size(); i++)
+    {
+        LOG(DEBUG, "Backup " << tableVect[i] << " Begin");
+        SQLCODE = 0;
+        ret = ProcessBackup(tableVect[i].c_str());
+        if(ret)
+        {
+            LOG(ERROR, "ProcessBackup ret=" << ret << ",table:" << tableVect[i]);
+            return ret;
+        }
+        LOG(DEBUG, "Backup " << tableVect[i] << " End");
+        SQLCODE = 0;
+        ret = RebuildView(szOwner, tableVect[i].c_str());
+        if(ret)
+        {
+            LOG(ERROR, "RebuildView ret=" << ret << ",table:" << tableVect[i]);
+            return ret;
+        }
+        LOG(DEBUG, "RebuildView " << tableVect[i] << " End");
+        SQLCODE = 0;
+        ret = ReCreateKey(szOwner, tableVect[i].c_str());
+        if(ret)
+        {
+            LOG(ERROR, "ReCreateKey ret=" << ret << ",table:" << tableVect[i]);
+            return ret;
+        }
+        LOG(DEBUG, "RebuildKey " << tableVect[i] << " End");
+        SQLCODE = 0;
+        ret = ReCreateIndex(szOwner, tableVect[i].c_str());
+        if(ret)
+        {
+            LOG(ERROR, "ReCreateIndex ret=" << ret << ",table:" << tableVect[i]);
+            return ret;
+        }
+        LOG(DEBUG, "ReCreateIndex " << tableVect[i] << " End");
+    }
+    ret = RebuildRecentDtl(szSettleDate, "T_ACCDTL");
+    if(ret)
+    {
+        LOG(ERROR, "RebuildRecentaccdtl ret=" << ret);
+        return ret;
+    }
+    LOG(DEBUG, "RebuildRecentaccdtl End");
+    ret = RebuildRecentDtl(szSettleDate, "T_TRANSDTL");
+    if(ret)
+    {
+        LOG(ERROR, "RebuildRecenttransdtl ret=" << ret);
+        return ret;
+    }
+    LOG(DEBUG, "RebuildRecenttransdtl End");
+
+    //清理POSDTL
+    char szCleanEndAccDate[9] = {0};
+    calcEndDate(szSettleDate, -5, szCleanEndAccDate);
+
+    char where[256] = {0};
+    sprintf(where, "where batchno<='%s000000'", szCleanEndAccDate);
+    //清理临时表
+    CleanOrigTable("t_customertmp", where);
+
+    memset(szCleanEndAccDate, 0, sizeof(szCleanEndAccDate));
+    calcEndDate(szSettleDate, -60, szCleanEndAccDate);
+
+    sprintf(where, "where status='3' and accdate<='%s'", szCleanEndAccDate);
+    CleanOrigTable("t_posdtl", where);
+
+    sprintf(where, "where status='3' and accdate<='%s'", szCleanEndAccDate);
+    CleanOrigTable("t_purseposdtl", where);
+
+    sprintf(where, "where status=3 and recvtime<='%s000000'", szCleanEndAccDate);
+    CleanOrigTable("t_posdata", where);
+
+    SQLCODE = 0;
+    LOG(DEBUG, "Rebuild user " << szOwner << " all index " << " begin");
+    ret = RebuildAllIndex(szOwner);
+    if(ret)
+    {
+        LOG(ERROR, "RebuildAllIndex ret=" << ret << ",user:" << szOwner);
+        return ret;
+    }
+    LOG(DEBUG, "rebuild all index end");
+    LOG(DEBUG, "DbClean完成");
+    db_disconnect();
+    return 0;
+}

@@ -1,0 +1,10 @@
+createecard_link.sql  -- ecard表建立photo库快照
+createhis_link.sql    -- 历史库建立快照
+createhis_tab.sql     -- 历史库建表
+createhis_tab_part.sql -- 历史库建表
+createhis_tab_part02.sql -- 历史库建表
+createhis_tbs.sql        -- 历史库建表
+createphoto_link.sql     -- 照片库建快照
+createphoto_tab.sql      -- 照片库建表
+createphoto_tbs.sql      -- 照片库建表空间
+gen_par_sql.py           -- 生成历史库历史表SQL语句脚本

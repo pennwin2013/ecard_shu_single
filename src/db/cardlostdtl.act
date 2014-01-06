@@ -1,0 +1,29 @@
+create table t_cardlostdtl
+(
+  cardno number,
+  dpscnt number,
+  paycnt number,
+  cardbefbal number,
+  amount number,
+  cardaftbal number,
+  transflag number,
+  transdate number,
+  datatype number,
+  createdate number,
+  chkflag number,
+  chkdate number,
+  chkoperid number,
+  handled number,
+  accdate number
+)
+begin
+action modename none end
+action add end
+action read_by cardno dpscnt paycnt cardbefbal end
+action update_by cardno dpscnt paycnt cardbefbal end
+action del_by cardno dpscnt paycnt cardbefbal end
+action read_lock_by c0 cardno dpscnt paycnt cardbefbal end
+action update_lock_by c0 end
+action del_lock_by c0 end
+action free_lock_by c0 end
+end

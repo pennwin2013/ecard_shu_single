@@ -1,0 +1,33 @@
+create table t_netdtl
+(
+  accdate number,
+  refno varchar2(20),
+  termid number,
+  termseqno number,
+  termdate number,
+  termtime number,
+  reqrefno varchar2(32),
+  custid number,
+  custname varchar2(60),
+  stuempno varchar2(20),
+  transcode number,
+  amount number,
+  balance number,
+  hostdate number,
+  hosttime number,
+  status number,
+  errcode number,
+  remark varchar2(60)
+)
+begin
+action modename none end
+action add end
+action read_by refno end
+action update_by refno end
+action del_by refno end
+action read_lock_by c0 refno end
+action update_lock_by c0 end
+action del_lock_by c0 end
+action free_lock_by c0 end
+action read_by reqrefno end
+end

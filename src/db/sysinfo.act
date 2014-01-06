@@ -1,0 +1,21 @@
+CREATE TABLE T_SYSINFO
+(
+PARAID  INTEGER NOT NULL,
+PARANAME VARCHAR(256) NOT NULL,
+PARAVAL VARCHAR(2048),
+SETFLAG NUMBER(1) ,
+DISPLAYFLAG NUMBER(1),
+VALTYPE NUMBER(1), 
+DICTTYPE   NUMBER,
+PARADESC VARCHAR(1000)
+)
+begin
+action modename YKT_CUR end
+action add end
+action del_by PARAID end
+action read_by PARAID  end
+action read_lock_by cur PARAID  end
+action update_by PARAID  end
+action update_lock_by cur  end
+action free_lock cur end
+end

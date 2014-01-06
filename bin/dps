@@ -1,0 +1,30 @@
+#!/bin/bash
+# vim: ts=4 et
+
+if [ -f ecard-function ]; then
+   source ecard-function
+fi
+SERVER=netsvr
+function get_svr_pid()
+{
+    pid=`ps -U $LOGNAME -o comm,pid | grep $SERVER|grep -v grep|awk 'BEGIN{line=0}{if(line==0){print $2;line=line+1;}}' `
+    echo $pid
+}
+
+id=`get_svr_pid`
+
+
+if [ -z $id ]; then
+    echo "netsvr is not running"
+else
+    ps -ef | awk -vparent=$id 'BEGIN{print "server pid is ",parent," \nall children process: "} $3 ~ parent {print $0;}'
+fi
+
+
+echo "==== ecard service processes =========="
+echo "PID   USER   STIME   CPU         COMMAND"
+PROC_LIST="icegridnode icegirdregistry netsvr posdtlacc posdatasvr dpsdtlacc waterdtlacc closesvr custsyncsvr svrmonitor gatesvr dayendbala colposdtl coldatasvr statsvr dbclean"
+for p in $PROC_LIST
+do
+     ps -U $LOGNAME -o pid,user,start_time,cputime,comm | grep $p | grep -v grep
+done

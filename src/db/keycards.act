@@ -1,0 +1,18 @@
+CREATE TABLE T_KEYCARDS
+(
+  CARDID    INTEGER NOT NULL,
+  CARDPHYID VARCHAR(16) NOT NULL,
+  PIN       VARCHAR(16),
+  KEYGROUP  INTEGER,
+  ISSUEDATE VARCHAR(8),
+  ISSUETIME VARCHAR(6),
+  OPERCODE   VARCHAR(10),
+  DELFLAG   INTEGER,
+  REMARK     VARCHAR(240)
+);
+begin
+action modename ykt_cur end
+action add end
+action read_by CARDID end
+action update_by CARDID end
+end

@@ -1,0 +1,1 @@
+create public database link ecarddb connect to ecard identified by kingstar using 'ECARDDB';

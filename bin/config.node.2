@@ -1,0 +1,19 @@
+#
+# The IceGrid locator proxy.
+#
+Ice.Default.Locator=eCardGrid/Locator:tcp -h app1.ecard -p 12000 -t 10000:tcp -h app2.ecard -p 12000 -t 10000
+
+#
+# IceGrid node configuration.
+#
+IceGrid.Node.Name=b-core-node
+IceGrid.Node.Endpoints=default -t 10000
+IceGrid.Node.Data=db/core-node
+
+Ice.StdErr=db/core-node/stderr.txt
+
+#
+# Trace properties.
+#
+Ice.ProgramName=Node2
+IceGrid.Node.Trace.Replica=2 

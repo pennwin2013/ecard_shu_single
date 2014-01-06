@@ -1,0 +1,419 @@
+/* --------------------------------------------
+ * 创建日期: 2013-04-09
+ * 程序作者: 闻剑
+ * 版本信息: 1.0.0.0
+ * 程序功能: 统计服务程序
+ * --------------------------------------------*/
+#include <stdio.h>
+#include <string.h>
+#include "pubdef.h"
+#include "errdef.h"
+#include "pubfunc.h"
+#include "pubdb.h"
+#include "dbfunc.h"
+#include "dbfunc_foo.h"
+#include "acctrans.h"
+#include <vector>
+#include <iostream>
+#include <sstream>
+#include "ConfigFile.h"
+#include "logger_imp.h"
+#include "ecarddbcfg.h"
+using namespace std;
+
+EXEC SQL INCLUDE SQLCA;
+typedef struct
+{
+    int cardno;
+    int balance;
+    int diffamt;
+    int amount;
+    char stattime[15];
+} TMyAccInfo;
+
+typedef vector<TMyAccInfo> DIFFCARDVECT;
+
+//读取卡库不平的卡号
+int GetDiffCardList(DIFFCARDVECT& CardVect)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        int ho_cardno = 0;
+        int ho_balance = 0;
+        int ho_cardbal = 0;
+        short indicator = 0;
+    EXEC SQL END DECLARE SECTION;
+    int ret = 0;
+    TMyAccInfo accInfo;
+
+    if(CardVect.size())
+        CardVect.clear();
+
+    EXEC SQL DECLARE acc_cur CURSOR FOR
+    SELECT
+        a.cardno,
+        round(a.balance*100),
+        round(a.cardbal*100)
+    FROM t_account a
+    where a.cardno>0 and a.status = '1' and a.balance<>a.cardbal and a.cardbal>=0
+    order by a.cardno;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_DECLARE;
+    }
+    EXEC SQL    OPEN acc_cur;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return E_DB_CURSOR_OPEN;
+    }
+    while(1)
+    {
+        memset(&accInfo, 0, sizeof(accInfo));
+        ho_cardno = 0;
+        ho_balance = 0;
+        ho_cardbal = 0;
+        EXEC SQL FETCH acc_cur INTO
+        :ho_cardno:indicator,
+        :ho_balance:indicator,
+        :ho_cardbal:indicator;
+        if(SQLCODE)
+        {
+            ret = SQLCODE;
+            CHECK_DB_ERR;
+            EXEC SQL CLOSE acc_cur;
+            if(DB_NOTFOUND == ret)
+                break;
+            else
+                return E_DB_ACCOUNT_R;
+        }
+        accInfo.cardno = ho_cardno;
+        accInfo.balance = ho_balance;
+        accInfo.diffamt = ho_balance - ho_cardbal;
+        CardVect.push_back(accInfo);
+    }
+    LOG(DEBUG, "读取到" << CardVect.size() << "条");
+    return 0;
+}
+enum OPFLAG {OP_ADD = 1, OP_UPD};
+static int DoEqualCardStat(int statdate, const char* stattime)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        int hi_statdate = statdate;
+        char hi_stattime[15] = {0};
+    EXEC SQL END DECLARE SECTION;
+    strcpy(hi_stattime, stattime);
+    SQLCODE = 0;
+    EXEC SQL
+    insert into t_carddiff(cardno,diffamt,amount,balance,statdate,stattime)
+    select t.cardno,0 diffamt,-a.diffamt amount,round(c.balance*100),:hi_statdate,:hi_stattime
+    from
+    (select cardno,max(statdate) statdate from t_carddiff group by cardno) t,
+    t_carddiff a,t_account c
+    where t.cardno=a.cardno
+    and t.statdate = a.statdate
+    and t.cardno = c.cardno
+    and c.balance = c.cardbal
+    and t.statdate < :hi_statdate
+    and a.diffamt <> 0;
+
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        if(DB_NOTFOUND == SQLCODE)
+            return 0;
+        else
+            return ERRIF_DATABASE_INS;
+    }
+    return 0;
+}
+static int GetStatCardiffDate(int& statdate, char* stattime, int& lastdate)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        int ho_statdate = 0;
+        char ho_stattime[15] = {0};
+        int ho_lastsdate = 0;
+        short indicator = 0;
+    EXEC SQL END DECLARE SECTION;
+    SQLCODE = 0;
+    EXEC SQL
+    select to_number(to_char(sysdate,'YYYYMMDD')),
+    to_char(sysdate,'YYYYMMDDHH24MISS')
+    into :ho_statdate,:ho_stattime from dual;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return ERRIF_DATABASE_DIS;
+    }
+    statdate = ho_statdate;
+    strcpy(stattime, ho_stattime);
+    EXEC SQL
+    select max(statdate) into :ho_lastsdate:indicator
+    from t_carddiff;
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        return ERRIF_DATABASE_DIS;
+    }
+    lastdate = ho_lastsdate;
+    return 0;
+}
+int DoDiffCardStat(int statdate, const char* stattime, TMyAccInfo&  accInfo)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        int hi_cardno = 0;
+        int ho_last_statdate = 0;
+        int ho_last_diffamt = 0;
+        short indicator = 0;
+    EXEC SQL END DECLARE SECTION;
+
+    int ret = 0;
+    hi_cardno = accInfo.cardno;
+    SQLCODE = 0;
+    EXEC SQL
+       select statdate,diffamt into
+       :ho_last_statdate:indicator,
+       :ho_last_diffamt:indicator
+       from t_carddiff
+       where cardno=:hi_cardno
+       and statdate=(select max(statdate) from t_carddiff where cardno=:hi_cardno);
+    if(SQLCODE)
+    {
+        CHECK_DB_ERR;
+        if(DB_NOTFOUND == SQLCODE)
+        {
+            T_t_carddiff carddiff;
+            memset(&carddiff, 0, sizeof(carddiff));
+            carddiff.statdate = statdate;
+            carddiff.cardno = accInfo.cardno;
+            carddiff.balance = accInfo.balance;
+            carddiff.amount = accInfo.diffamt;
+            carddiff.diffamt = accInfo.diffamt;
+            strcpy(carddiff.stattime, stattime);
+            ret = DB_t_carddiff_add(&carddiff);
+            if(ret)
+            {
+                if(DB_REPEAT == ret)
+                    return E_DB_CARDACCDIFF_E;
+                else
+                    return E_DB_CARDACCDIFF_I;
+            }
+        }
+        else
+            return E_DB_CARDACCDIFF_R;
+    }
+    else
+    {
+        accInfo.amount = accInfo.diffamt - ho_last_diffamt;
+        if(0 == accInfo.amount)
+        {
+            //没变化,则不处理
+            //LOG(DEBUG, "cardno " << accInfo.cardno << " no change");
+            return 0;
+        }
+        if(ho_last_statdate == statdate)
+        {
+            //当天统计过则不再统计
+            LOG(DEBUG, "已统计过");
+            return 0;
+        }
+        T_t_carddiff carddiff;
+        memset(&carddiff, 0, sizeof(carddiff));
+        carddiff.statdate = statdate;
+        carddiff.cardno = accInfo.cardno;
+        carddiff.balance = accInfo.balance;
+        carddiff.diffamt = accInfo.diffamt;
+        carddiff.amount = accInfo.amount;
+        strcpy(carddiff.stattime, stattime);
+        ret = DB_t_carddiff_add(&carddiff);
+        if(ret)
+        {
+            if(DB_REPEAT == ret)
+                return E_DB_CARDACCDIFF_E;
+            else
+                return E_DB_CARDACCDIFF_I;
+        }
+        return 0;
+    }
+    return 0;
+}
+int DoCardDiffProcess()
+{
+    int statdate = 0;
+    char stattime[21] = {0};
+    int lastdate = 0;
+    int ret;
+    ret = GetStatCardiffDate(statdate, stattime, lastdate);
+    if(ret)
+    {
+        LOG(ERROR, "GetStatCardiffDate ret=" << ret);
+        return ret;
+    }
+    //9点前23:50后不再重新生成,否则10分钟生成一次
+    if(strncmp(stattime + 8, "090000", 6) < 0)
+        return 0;
+    if(strncmp(stattime + 8, "235000", 6) > 0)
+        return 0;
+    LOG(DEBUG, "statdate[" << statdate << "]stattime[" << stattime << "]");
+    DIFFCARDVECT DiffCardVect;
+    ret = GetDiffCardList(DiffCardVect);
+    if(ret)
+    {
+        LOG(ERROR, "GetDiffCardList ret=" << ret);
+        return ret;
+    }
+    if(DiffCardVect.empty())
+    {
+        LOG(INFO, "GetDiffCardList nodata");
+    }
+    if(statdate == lastdate)
+    {
+        char delsql[256] = {0};
+        sprintf(delsql, "delete from t_carddiff where statdate=%d", statdate);
+        ret = DynamicStmtExecute(delsql);
+        if(ret)
+        {
+            db_chk_err(__FILE__, __LINE__, &sqlca);
+            if(DB_NOTFOUND != ret)
+            {
+                db_rollback();
+                return ret;
+            }
+        }
+    }
+    for(unsigned int i = 0; i < DiffCardVect.size(); i++)
+    {
+        ret = DoDiffCardStat(statdate, stattime, DiffCardVect[i]);
+        if(ret)
+        {
+            LOG(ERROR, "DoDiffCardStat ret=" << ret);
+            db_rollback();
+            return ret;
+        }
+    }
+    LOG(DEBUG, "DoDiffCardStat OK");
+    ret = DoEqualCardStat(statdate, stattime);
+    if(ret)
+    {
+        LOG(ERROR, "DoEqualCardStat ret=" << ret);
+        db_rollback();
+        return ret;
+    }
+    LOG(DEBUG, "DoEqualCardStat OK");
+    ret = db_commit();
+    if(ret)
+    {
+        LOG(ERROR, "db_commit error[ret]=" << ret);
+        return ret;
+    }
+    LOG(DEBUG, "DoCardDiffProcess OK");
+    return 0;
+}
+static bool init_config(string pathname, string& connectinfo, string& logconf)
+{
+    try
+    {
+        ConfigFile config(pathname);
+        try
+        {
+            config.readInto(connectinfo, "connectinfo");
+            config.readInto(logconf, "logconf");
+        }
+        catch(ConfigFile::key_not_found& ex)
+        {
+            cout << "read " << ex.key << " faild" << endl;
+            return false;
+        }
+        return true;
+    }
+    catch(ConfigFile::file_not_found& ex)
+    {
+        cout << "read file " << ex.filename << " faild " << endl;
+        return false;
+    }
+}
+
+int main(int argc, char *argv[])
+{
+    int ret = 0;
+    char  szVerNo[61] = {0};
+    sprintf(szVerNo, "%s.%s %s (%s %s)", argv[0], APP_USER, YKT_VERSION, __DATE__, __TIME__);
+    if(argc >= 2)
+    {
+        if(strncmp(argv[1], "-v", 2) == 0 || strncmp(argv[1], "-V", 2) == 0)
+        {
+            printf("%s\n", szVerNo);
+            return 0;
+        }
+        else
+        {
+            printf("statsvr: invalid option  %s\n", argv[1]);
+            return 0;
+        }
+    }
+    string conf = argv[0];
+    conf = conf + ".conf";
+
+    string connectinfo;
+    string logconf;
+    if(!init_config(conf, connectinfo, logconf))
+    {
+        cout << "init_config failed!";
+        return -1;
+    }
+    if(!init_logger(logconf))
+    {
+        cout << "server init log faild" << endl;
+        return -2;
+    }
+    LOG(DEBUG, "init ok");
+    char errmsg[512] = {0};
+    char szConnectInfo[256];
+    bool r = edb_get_db_url(NULL, "ecard", szConnectInfo, errmsg);
+    if(!r)
+    {
+        LOG(ERROR, "读取数据库连接参数失败" << errmsg);
+        if(connectinfo.size() < 1)
+            return -3;
+        LOG(INFO, "使用本地配置文件" << conf << "中的数据库连接连接");
+        ret = ConnectDb(connectinfo.c_str());
+    }
+    else
+    {
+        connectinfo = szConnectInfo;
+        ret = ConnectDb(connectinfo.c_str());
+    }
+    if(ret)
+    {
+        LOG(ERROR, "连接数据库失败，系统启动失败");
+        return ret;
+    }
+    LOG(DEBUG, "connect database ok");
+    const long check_interval = 600;//10分钟
+    time_t last_check = -check_interval;
+    time_t now = 0;
+    while(1)
+    {
+        if(!IsDatabaseConnect())
+        {
+            LOG(INFO, "connect database ...");
+            ret = ConnectDb(connectinfo.c_str());
+            if(ret)
+            {
+                db_chk_err(__FILE__, __LINE__, &sqlca);
+                LOG(ERROR, "connect to database error ret=" << ret);
+                sleep(30);
+                continue;
+            }
+        }
+        now = time(0);
+        if(now - last_check >= check_interval)
+        {
+            last_check = now;
+            DoCardDiffProcess();
+        }
+        sleep(60);
+    }
+    db_disconnect();
+    exit(0) ;
+}

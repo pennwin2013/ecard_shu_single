@@ -1,0 +1,24 @@
+#!/bin/bash
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:.
+
+if [ -f $HOME/ykt/bin/ecard-function ]; then
+    source $HOME/ykt/bin/ecard-function
+fi
+
+
+cd $HOME/ykt/bin && mkdir -p log
+
+PROC="icegridnode"
+check_proc_running $PROC
+
+if [ $? -eq 0 ]; then
+echo "$PROC already start"
+else
+    DBDIR="./db/core-node"
+    if ! ls $DBDIR > /dev/null 2>&1; then
+	mkdir -p $DBDIR
+    fi
+    ./icegridnode --nochdir --daemon --Ice.Config=config.node
+fi
+
+#svrmonitor

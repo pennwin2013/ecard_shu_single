@@ -1,0 +1,51 @@
+OS_VER=`uname`
+
+ORACLE_HOME=/home/oracle/oracle/product/10.2.0/db_1
+export ORACLE_HOME
+
+PATH=$PATH:$HOME/bin:$ORACLE_HOME/bin:.
+export PATH
+export LANG=zh_CN.gbk
+export DBTYPE
+DBTYPE=ORA
+export BIN_PATH=$HOME/ykt/bin
+YKT_USER=emaster;export YKT_USER
+YKT_PWD=kingstar;export YKT_PWD
+YKT_DBNAME=fdcvtdb;export YKT_DBNAME
+export USEROPTS="-DDEBUG -ggdb"
+#export PROC_OPTS="sqlcheck=full userid=$YKT_USER/$YKT_PWD@$YKT_DBNAME"
+export PROC_OPTS=
+CPLUS_INCLUDE_PATH=/usr/lib/gcc/i386-redhat-linux/3.4.6
+export CPLUS_INCLUDE_PATH
+export NLS_LANG=american_america.zhs16gbk
+LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH:$ORACLE_HOME/lib:$HOME/ykt/lib:.
+export LD_LIBRARY_PATH
+
+if [ "$OS_VER" = "SunOS" ] || [ "$OS_VER" = "AIX" ]; then
+	LD_LIBRARY_PATH=/usr/lib:/usr/local/lib:$ORACLE_HOME/lib32:$ORACLE_HOME/rdbms/lib32
+else
+	LD_LIBRARY_PATH=/usr/lib:/usr/local/lib:$ORACLE_HOME/lib:$ORACLE_HOME/rdbms/lib
+fi
+export LD_LIBRARY_PATH
+export NLS_LANG=american_america.ZHS16GBK
+
+export LANG=zh_CN.gbk
+export LANGUAGE=zh_CN.GBK
+
+alias cdi="cd $HOME/ykt/src/include"
+alias cdp="cd $HOME/ykt/src/public"
+alias cddb="cd $HOME/ykt/src/db"
+alias cds="cd $HOME/ykt/src"
+alias cdf="cd $HOME/ykt/src/ecardsvr"
+alias cdlog="cd $HOME/ykt/bin/log"
+alias cdb="cd $HOME/ykt/bin"
+alias cdl="cd $HOME/ykt/lib"
+alias cdsbin="cd $HOME/ykt/sbin"
+alias cdt="cd $HOME/ykt/src/test"
+alias cdtest="cd $HOME/test"
+alias cdtool="cd $HOME/ykt/src/tool"
+
+export BIN_PATH=$HOME/ykt/bin
+export PATH=$PATH:$HOME/ykt/sbin:$BIN_PATH:$BIN_PATH/icelib:.
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$BIN_PATH/icelib
+ulimit -c unlimited

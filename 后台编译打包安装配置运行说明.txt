@@ -1,0 +1,51 @@
+一、编译步骤
+  1、准备好编译环境
+     这一步有开发人员协助
+     主要工作有配置.bash_profile，配置ORACLE_HOME环境变量，PATH变量
+  2、从版本库取代码压缩成zip包放到$HOME/ykt/下
+     上传源码放到$HOME/ykt目录下，
+     解压缩源码包
+     命令： unzip  zip源码文件名 -d ykt
+  3、配置编译环境
+    cp ~/ykt/bash_profile ~/.bash_profile
+
+    修改 ~/ykt/yktprofile中的ORACLE_HOME等环境变量
+
+    执行  . ~/.bash_profile  使变量生效
+    
+    chmod +x ~/ykt/bin/dbcrt
+
+  3、执行批量make脚本makeall.sh
+     命令：cds
+     命令 makeall.sh
+     说明，一共有四个目录下需要make，分别是db、public、ecardsvr、batch，
+     如果编译显示SUCCESS，则说明make成功，如果出现FAILED则表明make失败，需要查找问题。
+二、程序打包
+    chmod +x ~/ykt/bin/tarecard.sh
+    在任意目录下执行tarecard.sh命令打包，打包完成后在$HOME下会出现名为ecardsvr**********.tar.gz的文件，
+    这个就是要发布的文件。
+三、安装配置
+    把打包好的文件ecardsvr**********.tar.gz的文件上传到目标服务器上。
+    在$HOME下执行解压缩命令
+	tar zxvf ecardsvr**********.tar.gz
+    修改配置
+    cp ~/ykt/bash_profile ~/.bash_profile
+
+    修改 ~/ykt/yktprofile中的ORACLE_HOME等环境变量
+
+    执行  . ~/.bash_profile  使变量生效
+
+    cd ~/ykt/bin
+    修改 .ecarddbcfg的数据库连接串
+    创建日志目录
+    mkdir -p ~/ykt/bin/log
+    后台环境基本配置完毕。
+    接着配置netsvr，请参考https://10.240.128.66/blog的文章“一卡通末日版安装说明”。
+四、运行后台
+    一切配置好后，执行sall运行后台
+    sall
+五、停止后台    
+    执行kall停止后台
+六、查看后台运行的进程
+    执行dps查看后台运行的进程
+    

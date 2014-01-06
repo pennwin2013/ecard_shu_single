@@ -1,0 +1,20 @@
+create table t_role
+(
+  roleid number,
+  rolename varchar2(60),
+  roledesc varchar2(240),
+  createdate number,
+  updtime varchar2(14),
+  deleted number
+)
+begin
+action modename ykt_cur end
+action add end
+action read_by roleid end
+action update_by roleid end
+action del_by roleid end
+action read_lock_by c0 roleid end
+action update_lock_by c0 end
+action del_lock_by c0 end
+action free_lock_by c0 end
+end

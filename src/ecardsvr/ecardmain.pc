@@ -1,0 +1,391 @@
+#include <stdio.h>
+#include <iostream>
+#include <fstream>
+#include "common.h"
+#include "logger_imp.h"
+#include "config_imp.h"
+#include "pubfunc.h"
+#include "esqlc.h"
+#include "dbfunc.h"
+#include "unitfunc.h"
+#include "client_session.h"
+#include "server_link.h"
+#include "ecarddbcfg.h"
+
+#include "acctrans.h"
+#include<iostream>
+#include<string>
+#include<sstream>
+using namespace std;
+
+FUN_MAP gFunMap;
+CMsgReader  gReader;
+CMsgWriter  gWriter;
+char gVersion[128];
+int localServiceCode;
+
+#define SETERRMSG(message) do { std::ostringstream oss;oss<<message;errmsg = oss.str();}while(0)
+class DataProcess
+{
+private:
+    server_link* client_;
+    server_info server_info_;
+public:
+    string  errmsg;
+    int   errcode;
+    int run();
+    DataProcess();
+    ~DataProcess();
+    int HandleError(int errtype, int retcode, const char* retmsg, vector<char>& respBuffRect);
+    int ProcessRequest(const vector<char> SendBuffVect, vector<char>& RecvBuffRecv);
+    void copy_vector(vector<char>& vec, std::size_t begin, FDXSLib::protocol_message* msg, std::size_t maxlen);
+    int StartCommServer();
+};
+DataProcess::DataProcess()
+{
+    errcode = 0;
+    errmsg = "";
+    client_ = NULL;
+}
+DataProcess::~DataProcess()
+{
+    if(NULL != client_)
+    {
+        delete client_;
+        client_ = NULL;
+    }
+}
+int DataProcess::StartCommServer()
+{
+    if(NULL == client_)
+    {
+        client_ = new server_link(server_info_);
+    }
+    if(!client_->connect_to(5))
+    {
+        cout << "connect to server error";
+        return -1;
+    }
+	netsvr::client_func_info* pclient_func_info;
+	size_t funcMapSize =gFunMap.size();
+	if(funcMapSize>0)
+	{
+		pclient_func_info = new netsvr::client_func_info[sizeof(netsvr::client_func_info)*funcMapSize];
+		map<int,PROCESSUNIT>::iterator it;
+		size_t cnt = 0;
+		for(it=gFunMap.begin();it!=gFunMap.end();++it)
+	  	{
+			pclient_func_info[cnt].funcno = it->first;
+			memset(pclient_func_info[cnt].funcdesc,0,sizeof(pclient_func_info[cnt].funcdesc));
+			sprintf(pclient_func_info[cnt].funcdesc,"%d",it->first);
+			cnt++;
+	  	}
+		client_->send_funcno(pclient_func_info,funcMapSize);	
+	}
+	/*
+	const size_t MaxSendLen = 20;
+	map<int,PROCESSUNIT>::iterator it;
+	int func_no[MaxSendLen];
+	int cnt = 0;
+  	for(it=gFunMap.begin();it!=gFunMap.end();++it)
+  	{
+		func_no[cnt++] = it->first;
+		if(cnt>MaxSendLen)
+		{
+			client_->send_funcno(func_no,MaxSendLen);
+			memset(func_no,0,MaxSendLen);
+			cnt = 0;
+		}		
+  	}
+	if(cnt>0)
+	{
+		client_->send_funcno(func_no,cnt);
+	}
+	*/
+	return 0;
+}
+#define ERRTYPE_NOERROR         0   //没有错误
+#define ERRTYPE_NETWORK         1   //网络故障
+#define ERRTYPE_DATABASE        2   //数据库故障
+#define ERRTYPE_SYSTEM          3   //系统错误
+#define ERRTYPE_BUSINESS        9   //正常的业务处理错误
+int DataProcess::HandleError(int errtype, int retcode, const char* retmsg, vector<char>& respBuffRect)
+{
+    gWriter.clear();
+    gWriter.attr["funcno"] = gReader.getAttrValAsInt("funcno");
+    switch(errtype)
+    {
+        case ERRTYPE_NETWORK:
+            gWriter.attr["errname"] = "网络故障";
+            break;
+        case ERRTYPE_DATABASE:
+            gWriter.attr["errname"] = "数据库故障";
+            break;
+        case ERRTYPE_SYSTEM:
+            gWriter.attr["errname"] = "系统错误";
+            break;
+        case ERRTYPE_BUSINESS:
+            gWriter.attr["errname"] = "业务处理失败";
+            break;
+        default:
+            errtype = ERRTYPE_BUSINESS;
+            gWriter.attr["errname"] = "业务处理失败";
+            break;
+    }
+    if(strlen(retmsg) < 1)
+    {
+        if(retcode)
+        {
+            CAccTrans *pAccTrans = CAccTrans::getInstance();
+            gWriter.attr["retmsg"] = pAccTrans->GetErrMsgTip(retcode).c_str();
+        }
+    }
+    else
+        gWriter.attr["retmsg"] = retmsg;
+    gWriter.attr["dbmsg"] = g_sqlmsg;
+    gWriter.attr["errtype"] = errtype;
+    gWriter.attr["retcode"] = retcode;
+    gWriter.serialize();
+    const string& respstr = gWriter.getMsgStr();
+    LOG(ERROR, "Error Resp: " << respstr);
+    respBuffRect.resize(respstr.size());
+    respBuffRect.assign(respstr.begin(), respstr.end());
+    respBuffRect.push_back(0);
+    return 0;
+}
+
+void DataProcess::copy_vector(vector<char>& vec, std::size_t begin,
+                              FDXSLib::protocol_message* msg, std::size_t maxlen)
+{
+    std::size_t count = 0;
+    FDXSLib::protocol_message* m;
+    for(m = msg; m != NULL && count < maxlen ; m = m->next())
+    {
+        std::size_t i = m->rd_left();
+        i = std::min(i, maxlen - count);
+        vec.insert(vec.end(), m->rd(), m->rd() + i);
+        m->rd(i);
+        count += i;
+    }
+}
+
+int DataProcess::run()
+{
+    int ret;
+    // 读取数据库配置
+    char connectinfo[256] = {0};
+    char errmsg[512] = {0};
+    bool r = edb_get_db_url(NULL, "ecard", connectinfo, errmsg);
+    if(!r)
+    {
+        LOG(ERROR, "未加载到数据库配置," << errmsg);
+        ret = ConnectDb(config_obj.connectinfo.c_str());
+    }
+    else
+    {
+        ret = ConnectDb(connectinfo);
+    }
+    if(ret)
+    {
+        LOG(ERROR, "连接数据库失败，系统启动失败");
+        return ret;
+    }
+    CAccTrans& ats = CAccTrans::GetInst();
+    ret = ats.LoadCfg();
+    if(ret)
+    {
+        LOG(ERROR, "加载配置参数失败，系统启动失败");
+        return ret;
+    }
+    strcpy(server_info_.svrip, config_obj.server_ip.c_str());
+    server_info_.svrport = config_obj.server_port;
+    server_info_.service_code = localServiceCode;//config_obj.service_code;
+    server_info_.internal_id = config_obj.internal_id;
+    if(StartCommServer())
+    {
+        LOG(ERROR, "connect to [" << server_info_.svrip << ":" << server_info_.svrport << "] error");
+        return -1;
+    }
+    while(client_->test_connect())
+    {
+        vector<char> sendBuffVect;
+        {
+            server_message msg;
+            if(!client_->get_message(msg))
+            {
+                continue;
+            }
+            if(msg.message_length == 0 && msg.bin_data == 0)
+                continue;
+            LOG(DEBUG, "recv request!");
+            sendBuffVect.reserve(msg.message_length);
+            //copy_vector( sendBuffVect , 0 , msg.message , msg.message_length );
+            sendBuffVect.insert(sendBuffVect.end(), msg.message, msg.message + msg.message_length);
+        }
+
+        vector<char> recvBuffVect;
+        ret = ProcessRequest(sendBuffVect, recvBuffVect);
+        if(ret)
+        {
+            LOG(ERROR, "ProcessRequest Error!ret=" << ret);
+        }
+        gWriter.clear();
+        LOG(DEBUG, "response length: " << recvBuffVect.size());
+        {
+            server_message send_msg;
+            send_msg.message = (char*) & (*recvBuffVect.begin());
+            send_msg.message_length = recvBuffVect.size();
+            bool r = client_->answer_data(send_msg);
+            send_msg.message = 0;
+            send_msg.message_length = 0;
+            if(!r)
+            {
+                LOG(ERROR, "send data to server error!");
+                continue;
+            }
+        }
+    }
+    LOG(DEBUG, "lost connection exit");
+    return -1;
+}
+
+int DataProcess::ProcessRequest(const vector<char> SendBuffVect, vector<char>& RecvBuffRecv)
+{
+    int ret = 0;
+    int funcno = 0;
+    errmsg.clear();
+    const char* sendbuff = (char*) & (*SendBuffVect.begin());
+    try
+    {
+        //    LOG( DEBUG, "request message: " << sendbuff );
+        ret = gReader.parse(sendbuff);
+        if(ret)
+        {
+            SETERRMSG("报文解析错误");
+            LOG(ERROR, "parse string failed,string:" << sendbuff);
+            HandleError(ERRTYPE_SYSTEM, ret, "报文解析错误", RecvBuffRecv);
+            return ret;
+        }
+        LOG(DEBUG, "parse request message ok");
+        funcno = gReader.getAttrValAsInt("funcno");
+        if(funcno < 1)
+        {
+            SETERRMSG("未发现funcno属性,报文不合法");
+            HandleError(ERRTYPE_SYSTEM, -1, errmsg.c_str(), RecvBuffRecv);
+            LOG(ERROR, errmsg);
+            return -1;
+        }
+        LOG(DEBUG, "read funcno ok");
+    }
+    catch(runtime_error theRuntimeError)
+    {
+        SETERRMSG("非法的请求报文:" << theRuntimeError.what());
+        LOG(ERROR, errmsg);
+        HandleError(ERRTYPE_SYSTEM, -1, errmsg.c_str(), RecvBuffRecv);
+        return -1;
+    }
+    catch(...)
+    {
+        SETERRMSG("非法的请求报文");
+        LOG(ERROR, errmsg);
+        HandleError(ERRTYPE_SYSTEM, -2, errmsg.c_str(), RecvBuffRecv);
+        return -2;
+    }
+    if(!CheckDbConnected())
+    {
+        LOG(INFO, "database is disconnected,reconnecting ...");
+        ret = ConnectDb(config_obj.connectinfo.c_str());
+        if(ret)
+        {
+            SETERRMSG("数据库连接已断开,重连失败,交易取消");
+            HandleError(ERRTYPE_DATABASE, ret, errmsg.c_str(), RecvBuffRecv);
+            return ret;
+        }
+        LOG(INFO, "reconnect to database OK");
+    }
+    LOG(DEBUG, "request message " << funcno << ": " << sendbuff);
+    FUN_MAP::iterator it = gFunMap.find(funcno);
+    if(it == gFunMap.end())
+    {
+        SETERRMSG("系统不支持功能号" << funcno);
+        LOG(ERROR, errmsg);
+        HandleError(ERRTYPE_SYSTEM, -3, errmsg.c_str(), RecvBuffRecv);
+        return -3;
+    }
+    CAccTrans& ats = CAccTrans::GetInst();
+    ret = ats.Reset();
+    if(ret)
+        return ret;
+    PROCESSUNIT function = it->second;
+    ret = (*function)();
+    if(ret)
+    {
+        db_rollback();
+        HandleError(ERRTYPE_BUSINESS, ret, errmsg.c_str(), RecvBuffRecv);
+        LOG(ERROR, "call function ret=" << ret << ",funcno=" << funcno);
+        return ret;
+    }
+    //LOG(DEBUG,"call "<<funcno<<"transaction end");
+    db_commit();
+    gWriter.attr["funcno"] = funcno;
+    gWriter.attr["errtype"] = 0;
+    gWriter.attr["retcode"] = 0;
+    LOG(DEBUG, funcno << "serialze start");
+    gWriter.serialize();
+    LOG(DEBUG, funcno << "serialze end");
+    const string& respstr = gWriter.getMsgStr();
+    if(respstr.size() < 1024)
+    {
+        LOG(DEBUG, "response message " << funcno << ": " << respstr);
+    }
+    RecvBuffRecv.resize(respstr.size());
+    RecvBuffRecv.assign(respstr.begin(), respstr.end());
+    RecvBuffRecv.push_back(0);
+    LOG(DEBUG, "call function success funcno=" << funcno);
+    return 0;
+}
+
+int main(int argc, char* argv[])
+{
+    sprintf(gVersion, "ecardsvr.%s %s (%s %s)", APP_USER, YKT_VERSION, __DATE__, __TIME__);
+    const char short_opts[] = "vsi";
+    int option;
+    while((option = getopt(argc, argv, short_opts)) != -1)
+    {
+        switch(option)
+        {
+            case 'v':
+                cout << gVersion << endl;
+                return 0;
+            case 's':
+                break;
+			case 'i':
+				localServiceCode = atoi(optarg);
+				break;
+            default:
+                cout << "invalid option" << endl;
+                return -1;
+        }
+    }
+    string conf = argv[0];
+    conf = conf + ".conf";
+    if(!init_config(conf))
+    {
+        cout << "init config faild" << endl;
+        return -1;
+    }
+    if(!init_logger(config_obj.log_conf))
+    {
+        cout << "server init log faild" << endl;
+        return -2;
+    }
+	LOG(DEBUG,config_obj.log_conf);
+    LOG(INFO, "version:" << gVersion);
+    LOG(DEBUG, "init log OK");
+    DataProcess dp;
+    LOG(DEBUG, "start service");
+    dp.run();
+    return 0;
+}
+// vim: ts=2 et ft=cpp
+

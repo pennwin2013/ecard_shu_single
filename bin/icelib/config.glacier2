@@ -1,0 +1,36 @@
+#
+# Set the Glacier2 instance name.
+#
+Glacier2.InstanceName=ECardGlacier2
+
+#
+# The client-visible endpoint of Glacier2. This should be an endpoint
+# visible from the public Internet, and it should be secure.
+# 
+Glacier2.Client.Endpoints=default -p 4064
+Glacier2.Server.Endpoints=default
+#
+# The timeout for inactive sessions. If any client session is inactive
+# for longer than this value, the session expires and is removed. The
+# unit is seconds.
+#
+Glacier2.SessionTimeout=60
+
+# 
+# For this demo, we use a custom permissions verifier collocated with
+# the session manager.
+# 
+Glacier2.PermissionsVerifier=ECardGlacier2/NullPermissionsVerifier
+
+Ice.Default.Locator=eCardGrid/Locator:tcp -h 172.18.109.100 -p 12001
+
+Glacier2.SessionManager.LocatorCacheTimeout=60
+
+
+Glacier2.Client.Trace.Request=1
+Glacier2.Server.Trace.Request=1
+Glacier2.Client.Trace.Override=1
+Glacier2.Server.Trace.Override=1
+Glacier2.Client.Trace.Reject=1
+Glacier2.Trace.Session=1
+Glacier2.Trace.RoutingTable=1

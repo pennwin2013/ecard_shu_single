@@ -1,0 +1,46 @@
+include ../mak/mkstand.mak
+LDFLAGS=-L../../lib  -lnetsvr -lfdxsmsg -lboost_filesystem -lboost_date_time -lboost_system -lboost_thread -lpthread -lrt -llog4cplus -lmessage -ljson_linux-gcc-4.1.2_libmt
+
+APLIBS=-L$(HOME)/ykt/lib -lstdc++ -lpubfunc  -lpubdb -lbi -L$(HOME)/ykt/bin -lbccclt -lecarddbcfg
+INCLD+=-I../include/fdxsmsglib
+
+all:banksvr
+
+FUNC=\
+F820000\
+F846316\
+F846317\
+F846318\
+F846319\
+F846321\
+F846322\
+F846323\
+F846324\
+F846300\
+F846340\
+F846307\
+F847111\
+F850005\
+F846306\
+F846304\
+F846500\
+F846312\
+banktrans\
+shem\
+yktclt
+ 
+SOURCE=\
+config_imp\
+logger_imp\
+ecardmain
+
+#系统初始化从右向左开始,SOURCE需要最先初始化,必须放在右边
+OBJS=$(FUNC:=.o) $(SOURCE:=.o) 
+
+banksvr:$(OBJS)
+	$(CXX) $(CCFLAGS) $(INCLD) -o $@ $(OBJS)  $(APLIBS) $(LIBSUDF) $(LDFLAGS) 
+	strip $@
+	mv $@ ../../bin
+	@echo "SUCCESS"
+clean:
+	@rm -f *.o tp* *.lis

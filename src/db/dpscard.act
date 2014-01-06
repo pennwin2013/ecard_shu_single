@@ -1,0 +1,17 @@
+create table t_dpscard (
+   cardno             number(9),
+   operid           number(9),,
+   createoperid         number(9),
+   createdate         number(8),
+   deletedate         number(8),
+   deleted			number(1)
+)
+begin
+action modename ykt_cur end
+action add end
+action read_by cardno end
+action read_lock_by c0 cardno end
+action update_lock_by c0 end
+action free_lock_by c0 end
+action read_by operid end
+end

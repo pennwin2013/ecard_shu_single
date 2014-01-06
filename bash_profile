@@ -1,0 +1,9 @@
+# .bash_profile
+# Get the aliases and functions
+if [ -f ~/.bashrc ]; then
+	. ~/.bashrc
+fi
+if [ -f ~/ykt/yktprofile ]; then
+	. ~/ykt/yktprofile
+fi
+

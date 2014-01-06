@@ -1,0 +1,35 @@
+
+<icegrid>
+  <application name="Ecard">
+    <!--
+    /////////////////////////////////////////////////////////////////////
+    -->
+    <server-template id="ecard.server">
+      <parameter name="index"/>
+      <parameter name="svrip" />
+      <server id="core-ecard-${index}" exe="./netsvr" activation="always">
+        <adapter name="YKT" endpoints="tcp">
+          <object identity="ecard.core" type="::transfer::CallServer" property="Identity"/>
+        </adapter>
+        <property name="Identity" value="ecard.core"/>
+        <property name="YKT.Endpoints" value="tcp -h ${svrip} -p 10000"/>
+        <property name="queue.port" value="10010" />
+        <property name="queue.list" value="core"/>
+        <property name="core.queue.desc" value="ecard core service"/>
+        <property name="core.queue.processcount" value="10"/>
+        <property name="core.queue.maxprocesscount" value="10"/>
+        <property name="core.queue.process" value="./ecardsvr"/>
+        <property name="core.queue.servciecode" value="1000"/>
+        <property name="core.queue.maxtask" value="1000"/>
+        <property name="core.queue.maxmem" value="5"/>
+      </server>
+    </server-template>
+
+
+    <node name="a-core-node">
+      <server-instance template="ecard.server" index="1" svrip="app1.ecard" />
+    </node>
+
+  </application>
+
+</icegrid>
