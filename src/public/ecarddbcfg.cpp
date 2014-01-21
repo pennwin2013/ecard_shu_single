@@ -102,13 +102,13 @@ bool edb_get_db_url(const char* startpath,const char* signkey,char* url,char err
 
 	if(!cfg.keyExists(signkey))
 	{
-		strcpy(errmsg,"指定数据库配置不存在");
+		strcpy(errmsg,"1指定数据库配置不存在1");
 		return false;
 	}
 	string dbcfg;
 	if(!cfg.readInto(dbcfg,signkey))
 	{
-		strcpy(errmsg,"指定数据库配置不存在");
+		strcpy(errmsg,"1指定数据库配置不存在2");
 		return false;
 	}
 

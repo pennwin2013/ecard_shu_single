@@ -24,11 +24,20 @@ FUNCTION(870023)
     CAccTrans& ats = CAccTrans::GetInst();
     TRANS& trans = ats.trans;
     gReader.fetchRow();
-
+	LOG(DEBUG,"recv 870023");
+	COL2ST(trans,custid);
+	LOG(DEBUG,"custid="<<trans.custid);
     //返回的属性
+    ST2COL(trans,custid);
     gWriter.attr["retmsg"] = "测试";
     //6.返回支付结果
     gWriter.addRow();
+	size_t cnt = 60;
+	while(cnt-->0)
+	{
+		LOG(DEBUG,"870023处理中..剩余"<<cnt<<"秒");
+		sleep(1);
+	}
     return 0;
 }
 

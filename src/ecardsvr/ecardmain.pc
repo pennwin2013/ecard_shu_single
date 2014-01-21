@@ -66,42 +66,40 @@ int DataProcess::StartCommServer()
         cout << "connect to server error";
         return -1;
     }
-	netsvr::client_func_info* pclient_func_info;
 	size_t funcMapSize =gFunMap.size();
+	LOG(DEBUG,"funcMapSize="<<funcMapSize);
 	if(funcMapSize>0)
 	{
-		pclient_func_info = new netsvr::client_func_info[sizeof(netsvr::client_func_info)*funcMapSize];
-		map<int,PROCESSUNIT>::iterator it;
-		size_t cnt = 0;
-		for(it=gFunMap.begin();it!=gFunMap.end();++it)
-	  	{
-			pclient_func_info[cnt].funcno = it->first;
-			memset(pclient_func_info[cnt].funcdesc,0,sizeof(pclient_func_info[cnt].funcdesc));
-			sprintf(pclient_func_info[cnt].funcdesc,"%d",it->first);
-			cnt++;
-	  	}
-		client_->send_funcno(pclient_func_info,funcMapSize);	
-	}
-	/*
-	const size_t MaxSendLen = 20;
-	map<int,PROCESSUNIT>::iterator it;
-	int func_no[MaxSendLen];
-	int cnt = 0;
-  	for(it=gFunMap.begin();it!=gFunMap.end();++it)
-  	{
-		func_no[cnt++] = it->first;
-		if(cnt>MaxSendLen)
+		netsvr::client_func_info* pclient_func_info = new netsvr::client_func_info[sizeof(netsvr::client_func_info)*funcMapSize];		
+		try
 		{
-			client_->send_funcno(func_no,MaxSendLen);
-			memset(func_no,0,MaxSendLen);
-			cnt = 0;
-		}		
-  	}
-	if(cnt>0)
-	{
-		client_->send_funcno(func_no,cnt);
+			map<int,PROCESSUNIT>::iterator it;
+			size_t cnt = 0;
+			for(it=gFunMap.begin();it!=gFunMap.end();++it)
+		  	{
+				pclient_func_info[cnt].funcno = it->first;
+				memset(pclient_func_info[cnt].funcdesc,0,sizeof(pclient_func_info[cnt].funcdesc));
+				sprintf(pclient_func_info[cnt].funcdesc,"%d",it->first);
+				cnt++;
+		  	}
+			bool r = client_->send_funcno(pclient_func_info,funcMapSize);
+			delete [] pclient_func_info;
+			pclient_func_info = NULL;
+			if(!r)
+			{
+				LOG(DEBUG,"send_funcno failed");
+				return -1;
+			}
+		}
+		catch(...)
+		{
+			LOG(DEBUG,"send_funcno exception");
+			delete [] pclient_func_info;
+			pclient_func_info = NULL;
+			return -1;
+		}
+		
 	}
-	*/
 	return 0;
 }
 #define ERRTYPE_NOERROR         0   //没有错误
@@ -183,6 +181,7 @@ int DataProcess::run()
     }
     else
     {
+		LOG(DEBUG,"调用ConnectDb(connectinfo)");
         ret = ConnectDb(connectinfo);
     }
     if(ret)
@@ -348,7 +347,7 @@ int DataProcess::ProcessRequest(const vector<char> SendBuffVect, vector<char>& R
 int main(int argc, char* argv[])
 {
     sprintf(gVersion, "ecardsvr.%s %s (%s %s)", APP_USER, YKT_VERSION, __DATE__, __TIME__);
-    const char short_opts[] = "vsi";
+    const char short_opts[] = "v:s:i:";
     int option;
     while((option = getopt(argc, argv, short_opts)) != -1)
     {
@@ -384,6 +383,7 @@ int main(int argc, char* argv[])
     LOG(DEBUG, "init log OK");
     DataProcess dp;
     LOG(DEBUG, "start service");
+	LOG(DEBUG,"localServiceCode="<<localServiceCode);
     dp.run();
     return 0;
 }
